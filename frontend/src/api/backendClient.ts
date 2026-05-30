@@ -1,0 +1,235 @@
+/**
+ * Backend-Client: typsichere Wrapper fuer alle REST-Endpunkte.
+ * Nutzt window.clip2guide.backendUrl oder faellt auf localhost:8787 zurueck.
+ */
+
+const BASE = typeof window !== "undefined" && window.clip2guide?.backendUrl
+  ? window.clip2guide.backendUrl
+  : "http://localhost:8787";
+
+// ── Typen ──────────────────────────────────────────────────────────────────────
+
+export interface UploadResponse {
+  video_id: string;
+  filename: string;
+  path: string;
+  has_audio: boolean;
+  metadata: Record<string, unknown>;
+}
+
+export interface JobStartResponse {
+  job_id: string;
+  video_id: string;
+  message: string;
+}
+
+export interface FrameInfo {
+  filename: string;
+  timestamp_seconds: number;
+  scene_index: number | null;
+  /** Lokale Bild-URL fuer importierte Frames (Datei/Zwischenablage) */
+  dataUrl?: string;
+}
+
+export interface FrameStack {
+  video_id: string;
+  frames: FrameInfo[];
+  total_frames: number;
+}
+
+export interface TextPanel {
+  heading: string;
+  body: string;
+  speaker_notes: string;
+}
+
+export interface Scene {
+  scene_id: string;
+  start_frame: string;
+  end_frame: string | null;
+  image_group: string[];
+  texts: Record<string, TextPanel>;
+  duration_seconds: number;
+}
+
+export interface StoryboardJson {
+  video_id: string;
+  source_video: string;
+  cut_video: string | null;
+  languages: string[];
+  scenes: Scene[];
+  metadata: Record<string, unknown>;
+}
+
+export interface JobEvent {
+  type: "progress" | "completed" | "error" | "log";
+  step: string;
+  message: string;
+  percent: number;
+  data?: Record<string, unknown>;
+}
+
+// ── API-Funktionen ─────────────────────────────────────────────────────────────
+
+async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(`${BASE}${url}`, options);
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`HTTP ${response.status}: ${body || response.statusText}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export const api = {
+  health(): Promise<{ status: string; version: string }> {
+    return request("/health");
+  },
+
+  uploadVideo(file: File): Promise<UploadResponse> {
+    const form = new FormData();
+    form.append("file", file);
+    return request<UploadResponse>("/api/upload/video", { method: "POST", body: form });
+  },
+
+  normalizeVideo(videoId: string, hasAudio: boolean): Promise<JobStartResponse> {
+    return request<JobStartResponse>(
+      `/api/videos/${videoId}/normalize?has_audio=${hasAudio}`,
+      { method: "POST" }
+    );
+  },
+
+  cutVideo(
+    videoId: string,
+    editMode: string,
+    hasAudio: boolean,
+    margin?: string,
+    audioThreshold?: number,
+    motionThreshold?: number,
+  ): Promise<JobStartResponse> {
+    return request<JobStartResponse>(`/api/videos/${videoId}/cut`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        video_id: videoId,
+        edit_mode: editMode,
+        has_audio: hasAudio,
+        margin,
+        audio_threshold: audioThreshold,
+        motion_threshold: motionThreshold,
+      }),
+    });
+  },
+
+  extractFrames(videoId: string): Promise<JobStartResponse> {
+    return request<JobStartResponse>(`/api/videos/${videoId}/extract-frames`, { method: "POST" });
+  },
+
+  async getFrameStack(videoId: string): Promise<FrameStack | null> {
+    const res = await fetch(`${BASE}/api/videos/${videoId}/frame-stack`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`);
+    return res.json() as Promise<FrameStack>;
+  },
+
+  frameImageUrl(videoId: string, filename: string): string {
+    return `${BASE}/api/videos/${videoId}/frames/${filename}`;
+  },
+
+  getAiModels(provider: string): Promise<{ provider: string; models: string[]; default: string }> {
+    return request(`/api/ai/models?provider=${encodeURIComponent(provider)}`);
+  },
+
+  analyzeVideo(videoId: string, languages: string[], provider?: string, model?: string, selectedFrames?: string[]): Promise<JobStartResponse> {
+    return request<JobStartResponse>(`/api/videos/${videoId}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        video_id: videoId,
+        languages,
+        ai_provider: provider,
+        ai_model: model,
+        selected_frames: selectedFrames ?? [],
+      }),
+    });
+  },
+
+  getStoryboard(videoId: string): Promise<StoryboardJson> {
+    return request<StoryboardJson>(`/api/videos/${videoId}/storyboard`);
+  },
+
+  updateStoryboard(videoId: string, storyboard: StoryboardJson): Promise<StoryboardJson> {
+    return request<StoryboardJson>(`/api/videos/${videoId}/storyboard`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storyboard }),
+    });
+  },
+
+  uploadCustomFrames(videoId: string, files: File[]): Promise<FrameStack> {
+    const form = new FormData();
+    for (const file of files) {
+      form.append("files", file);
+    }
+    return request<FrameStack>(`/api/videos/${videoId}/frames/upload`, { method: "POST", body: form });
+  },
+
+  renderVideo(
+    videoId: string,
+    languages: string[],
+    fps?: number,
+    quality?: string,
+    ttsSlow?: boolean,
+  ): Promise<JobStartResponse> {
+    return request<JobStartResponse>(`/api/videos/${videoId}/render`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        video_id: videoId,
+        languages,
+        fps: fps ?? 25,
+        quality: quality ?? "ausgewogen",
+        tts_slow: ttsSlow ?? false,
+      }),
+    });
+  },
+};
+
+// ── SSE Job-Helper ────────────────────────────────────────────────────────────
+
+export function subscribeToJob(
+  jobId: string,
+  onEvent: (event: JobEvent) => void,
+  onDone?: () => void
+): () => void {
+  const url = `${BASE}/api/jobs/${jobId}/events`;
+  const es = new EventSource(url);
+
+  es.onmessage = (msg) => {
+    try {
+      const event: JobEvent = JSON.parse(msg.data);
+      onEvent(event);
+      if (event.type === "completed" || event.type === "error") {
+        es.close();
+        onDone?.();
+      }
+    } catch {
+      // ignore malformed events
+    }
+  };
+
+  es.onerror = () => {
+    // EventSource versucht nach Fehlern automatisch neu zu verbinden.
+    // Wir schliessen explizit und melden einen Fehler.
+    es.close();
+    onEvent({
+      type: "error",
+      step: "sse",
+      message: "Verbindung zum Server unterbrochen. Ist das Backend gestartet?",
+      percent: 0,
+    });
+    onDone?.();
+  };
+
+  // Cleanup-Funktion
+  return () => es.close();
+}

@@ -1,0 +1,77 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    // ── Electron TypeScript kompilieren ──────────────────────────────────────
+    {
+      "label": "compile: electron",
+      "type": "shell",
+      "command": "npx tsc -p tsconfig.electron.json",
+      "group": "build",
+      "presentation": { "reveal": "silent", "panel": "shared" },
+      "problemMatcher": ["$tsc"]
+    },
+
+    // ── Python Backend starten ────────────────────────────────────────────────
+    {
+      "label": "serve: backend",
+      "type": "shell",
+      "command": "${workspaceFolder}\\backend\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-m", "uvicorn", "app.main:app",
+        "--host", "127.0.0.1",
+        "--port", "8787",
+        "--reload"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\backend",
+        "env": {
+          "PYTHONDONTWRITEBYTECODE": "1"
+        }
+      },
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "label": "Backend (FastAPI)"
+      },
+      "problemMatcher": {
+        "pattern": { "regexp": "^(ERROR|error).*$", "file": 1, "line": 2, "message": 3 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Started reloader process",
+          "endsPattern": "Application startup complete\\."
+        }
+      }
+    },
+
+    // ── Vite Dev-Server starten ───────────────────────────────────────────────
+    {
+      "label": "serve: vite",
+      "type": "shell",
+      "command": "npm run dev:vite",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "label": "Vite (Renderer)"
+      },
+      "problemMatcher": {
+        "pattern": { "regexp": "^(ERROR|error).*$", "file": 1, "line": 2, "message": 3 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "\\s*vite",
+          "endsPattern": "ready in"
+        }
+      }
+    },
+
+    // ── Alles für den Dev-Modus vorbereiten ───────────────────────────────────
+    {
+      "label": "dev: prepare",
+      "dependsOn": ["compile: electron", "serve: backend", "serve: vite"],
+      "dependsOrder": "parallel",
+      "group": "build",
+      "presentation": { "reveal": "silent" }
+    }
+  ]
+}

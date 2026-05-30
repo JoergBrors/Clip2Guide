@@ -1,0 +1,79 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    // ── Electron Hauptprozess debuggen ────────────────────────────────────────
+    {
+      "name": "Electron: Dev",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron",
+      "runtimeArgs": ["--remote-debugging-port=9223", "."],
+      "program": "${workspaceFolder}/dist/electron/main.js",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "NODE_ENV": "development",
+        // Backend und Vite werden von VS Code Tasks gestartet –
+        // Electron soll NICHT selbst versuchen das Backend zu spawnen.
+        "SKIP_BACKEND_SPAWN": "1"
+      },
+      "outFiles": ["${workspaceFolder}/dist/electron/**/*.js"],
+      "sourceMaps": true,
+      "preLaunchTask": "dev: prepare",
+      "presentation": {
+        "group": "clip2guide",
+        "order": 1
+      }
+    },
+
+    // ── Python Backend debuggen ───────────────────────────────────────────────
+    {
+      "name": "Python: Backend",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--host", "127.0.0.1",
+        "--port", "8787",
+        "--reload"
+      ],
+      "cwd": "${workspaceFolder}/backend",
+      "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "jinja": true,
+      "presentation": {
+        "group": "clip2guide",
+        "order": 2
+      }
+    },
+
+    // ── Renderer (Chrome DevTools via Vite) ────────────────────────────────
+    {
+      "name": "Chrome: Renderer",
+      "type": "chrome",
+      "request": "attach",
+      "port": 9223,
+      "webRoot": "${workspaceFolder}/frontend/src",
+      "sourceMaps": true,
+      "presentation": {
+        "group": "clip2guide",
+        "order": 3
+      }
+    }
+  ],
+
+  // ── Alles auf einmal starten ──────────────────────────────────────────────
+  "compounds": [
+    {
+      "name": "Clip2Guide: Full Dev",
+      "configurations": ["Electron: Dev", "Python: Backend"],
+      "presentation": {
+        "group": "clip2guide",
+        "order": 0
+      },
+      "stopAll": true
+    }
+  ]
+}

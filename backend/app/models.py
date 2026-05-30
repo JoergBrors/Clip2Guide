@@ -1,0 +1,136 @@
+"""
+Clip2Guide – Pydantic-Datenmodelle
+"""
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
+
+# ── Enums ─────────────────────────────────────────────────────────────────────
+
+class EditMode(str, Enum):
+    AUDIO = "audio"
+    MOTION = "motion"
+    COMBINED = "combined"
+
+
+class AiProvider(str, Enum):
+    GEMINI = "gemini"
+    OPENAI = "openai"
+
+
+# ── Storyboard / Szenenstruktur ───────────────────────────────────────────────
+
+class TextPanel(BaseModel):
+    """Texteinblendung fuer eine Szene."""
+    heading: str = Field(default="", description="Ueberschrift / Schritt-Bezeichnung")
+    body: str = Field(default="", description="Erklaerungstext")
+    speaker_notes: str = Field(default="", description="Vorlese-Text fuer TTS")
+
+
+class Scene(BaseModel):
+    """Eine einzelne Szene im Storyboard."""
+    scene_id: str = Field(..., description="Eindeutige Szenen-ID, z.B. 'scene_001'")
+    start_frame: str = Field(..., description="Dateiname des ersten Frames, z.B. 'frame_001.jpg'")
+    end_frame: Optional[str] = Field(None, description="Dateiname des letzten Frames (inklusiv)")
+    image_group: List[str] = Field(default_factory=list, description="Liste aller Frame-Dateinamen dieser Szene")
+    texts: Dict[str, TextPanel] = Field(
+        default_factory=dict,
+        description="Sprachcode -> TextPanel, z.B. {'de': TextPanel(...)}"
+    )
+    duration_seconds: float = Field(default=5.0, ge=0.5, description="Gewuenschte Laenge dieser Szene in Sekunden")
+
+
+class StoryboardJson(BaseModel):
+    """Vollstaendiges Storyboard eines Videos."""
+    video_id: str
+    source_video: str = Field(description="Dateiname des Quellvideos")
+    cut_video: Optional[str] = Field(None, description="Dateiname des geschnittenen Videos")
+    languages: List[str] = Field(default_factory=list, description="Liste der Zielsprachen")
+    scenes: List[Scene] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Frame Stack ───────────────────────────────────────────────────────────────
+
+class FrameInfo(BaseModel):
+    """Metadaten zu einem extrahierten Frame."""
+    filename: str
+    timestamp_seconds: float
+    scene_index: Optional[int] = None
+
+
+class FrameStack(BaseModel):
+    """Alle Frames eines Videos mit optionaler Szenen-Zuordnung."""
+    video_id: str
+    frames: List[FrameInfo] = Field(default_factory=list)
+    total_frames: int = 0
+
+
+# ── Job-Status ────────────────────────────────────────────────────────────────
+
+class JobEvent(BaseModel):
+    """WebSocket-Event fuer laufende Jobs."""
+    type: str = Field(..., description="'progress', 'completed' oder 'error'")
+    step: str = Field(default="", description="Aktueller Verarbeitungsschritt")
+    message: str = Field(default="")
+    percent: int = Field(default=0, ge=0, le=100)
+    data: Optional[Dict[str, Any]] = None
+
+
+# ── Request-Modelle ───────────────────────────────────────────────────────────
+
+class ProcessingRequest(BaseModel):
+    video_id: str
+    edit_mode: EditMode = EditMode.AUDIO
+    margin: Optional[str] = None          # z.B. "0.5s" – None = Config-Default
+    has_audio: bool = True
+    audio_threshold: Optional[float] = None   # 0.01-0.30, None = 0.03
+    motion_threshold: Optional[float] = None  # 0.01-0.30, None = 0.08
+
+
+class AnalyzeRequest(BaseModel):
+    video_id: str
+    languages: List[str] = Field(default_factory=lambda: ["de"])
+    ai_provider: Optional[AiProvider] = None
+    ai_model: Optional[str] = None  # Wenn gesetzt, ueberschreibt den Default-Modellnamen
+    selected_frames: List[str] = Field(
+        default_factory=list,
+        description="Dateinamen der ausgewaehlten Frames. Leer = alle Frames verwenden."
+    )
+
+
+class RenderRequest(BaseModel):
+    video_id: str
+    languages: List[str] = Field(default_factory=lambda: ["de"])
+    fps: int = Field(default=25, ge=10, le=60)
+    quality: str = Field(default="ausgewogen")   # schnell | ausgewogen | beste
+    tts_slow: bool = Field(default=False)
+
+
+class StoryboardUpdateRequest(BaseModel):
+    storyboard: StoryboardJson
+
+
+# ── Response-Modelle ──────────────────────────────────────────────────────────
+
+class UploadResponse(BaseModel):
+    video_id: str
+    filename: str
+    path: str
+    has_audio: bool
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class JobStartResponse(BaseModel):
+    job_id: str
+    video_id: str
+    message: str = "Job gestartet"
+
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str

@@ -1,0 +1,11 @@
+localstuff/*
+backend/.venv/
+tools/
+workspace/
+.env
+__pycache__/
+*.pyc
+*.egg-info/
+node_modules/
+dist/
+.DS_Store

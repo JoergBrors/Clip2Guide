@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+python-multipart
+aiofiles
+requests
+httpx
+numpy
+opencv-python
+moviepy
+pillow
+gtts
+imageio
+imageio-ffmpeg
+google-genai
+openai
