@@ -20,8 +20,13 @@ jobs:
         include:
           - os: windows-latest
             platform: win
+            arch: x64
+          - os: macos-13
+            platform: mac
+            arch: x64
           - os: macos-latest
             platform: mac
+            arch: arm64
 
     steps:
       - name: Checkout
@@ -75,7 +80,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Verhindert macOS-Notarisierung (kein Apple-Zertifikat im CI)
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --${{ matrix.platform }} --publish never
+        run: npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
 
       - name: List release artifacts
         shell: bash
@@ -84,7 +89,7 @@ jobs:
       - name: Upload Release Assets
         uses: actions/upload-artifact@v4
         with:
-          name: installer-${{ matrix.platform }}
+          name: installer-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             dist/release/*.exe
             dist/release/*.dmg
@@ -100,14 +105,21 @@ jobs:
       - name: Download Windows installer
         uses: actions/download-artifact@v4
         with:
-          name: installer-win
+          name: installer-win-x64
           path: artifacts/win
         continue-on-error: true
 
-      - name: Download macOS installer
+      - name: Download macOS x64 installer
         uses: actions/download-artifact@v4
         with:
-          name: installer-mac
+          name: installer-mac-x64
+          path: artifacts/mac
+        continue-on-error: true
+
+      - name: Download macOS arm64 installer
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-mac-arm64
           path: artifacts/mac
         continue-on-error: true
 

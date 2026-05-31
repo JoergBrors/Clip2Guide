@@ -51,9 +51,6 @@ nsis:
 mac:
   target:
     - target: dmg
-      arch:
-        - x64
-        - arm64
   category: public.app-category.productivity
   icon: frontend/public/icon.icns
   # Ohne Apple-Developer-Zertifikat: notarize deaktivieren
