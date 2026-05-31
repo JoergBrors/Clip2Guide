@@ -41,23 +41,19 @@ function startBackend(): void {
     return;
   }
 
-  // In production: resourcesRoot = process.resourcesPath
-  //   (z.B. %LOCALAPPDATA%\Programs\Clip2Guide\resources)
-  // In dev:        resourcesRoot = Projektverzeichnis (3 Ebenen über dist/electron/)
+  // Python-Quellcode (app/) liegt immer in app.asar.unpacked (read-only, in Program Files)
   const resourcesRoot = isDev
     ? path.resolve(__dirname, "../../..")
     : process.resourcesPath;
-
-  // initial.ps1 / initial.sh legt das venv unter <resourcesRoot>/backend/.venv an
-  const backendDir = path.join(resourcesRoot, "backend");
-  // uvicorn braucht das echte Dateisystem-Verzeichnis (nicht ASAR-virtuell)
   const backendCwd = isDev
-    ? backendDir
+    ? path.join(resourcesRoot, "backend")
     : path.join(resourcesRoot, "app.asar.unpacked", "backend");
 
+  // venv liegt in USER_LOCAL_DIR (beschreibbar), NICHT in Program Files
   const isWindows = process.platform === "win32";
   const venvPython = path.join(
-    backendDir,
+    USER_LOCAL_DIR,
+    "backend",
     ".venv",
     isWindows ? "Scripts\\python.exe" : "bin/python"
   );
@@ -75,7 +71,8 @@ function startBackend(): void {
     ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(BACKEND_PORT)],
     {
       cwd: backendCwd,
-      env: { ...process.env, APP_ENV_FILE: USER_ENV_FILE, PROJECT_ROOT: resourcesRoot },
+      // PROJECT_ROOT → config.py löst ./workspace, ./tools relativ dazu auf
+      env: { ...process.env, APP_ENV_FILE: USER_ENV_FILE, PROJECT_ROOT: USER_LOCAL_DIR },
       stdio: ["ignore", "pipe", "pipe"],
     }
   );
