@@ -43,34 +43,37 @@ jobs:
       - name: Build (Vite + Electron TypeScript)
         run: npm run build
 
-      # macOS: Icon-Placeholders erzeugen wenn nicht vorhanden
+      # macOS: gültige Placeholder-Icons mit Python + iconutil erzeugen
       - name: Ensure icon placeholders (macOS)
         if: matrix.os == 'macos-latest'
         shell: bash
         run: |
-          mkdir -p frontend/public
-          if [ ! -f frontend/public/icon.icns ]; then
-            # Leere ICNS-Datei als Platzhalter (electron-builder toleriert das im CI)
-            touch frontend/public/icon.icns
-          fi
-          if [ ! -f frontend/public/dmg-background.png ]; then
-            # 1×1 weißes PNG als Platzhalter
-            printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82' > frontend/public/dmg-background.png
-          fi
+          mkdir -p frontend/public /tmp/icon.iconset
+          python3 - <<'PYEOF'
+          import zlib, struct, os
+          def make_png(w, h, r=200, g=200, b=200):
+              def chunk(tag, data):
+                  crc = zlib.crc32(tag + data) & 0xffffffff
+                  return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', crc)
+              rows = b''.join(b'\x00' + bytes([r, g, b]) * w for _ in range(h))
+              ihdr = struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)
+              return (b'\x89PNG\r\n\x1a\n' +
+                      chunk(b'IHDR', ihdr) +
+                      chunk(b'IDAT', zlib.compress(rows)) +
+                      chunk(b'IEND', b''))
+          for sz, name in [(16,'icon_16x16.png'),(32,'icon_32x32.png'),(128,'icon_128x128.png'),(256,'icon_256x256.png'),(512,'icon_512x512.png')]:
+              open(f'/tmp/icon.iconset/{name}', 'wb').write(make_png(sz, sz))
+          open('frontend/public/dmg-background.png', 'wb').write(make_png(540, 380, 240, 240, 240))
+          PYEOF
+          iconutil --convert icns /tmp/icon.iconset -o frontend/public/icon.icns
 
-      # Windows: Icon-Placeholder erzeugen wenn nicht vorhanden
+      # Windows: gültiges ICO (1×1 px, 24bpp) mit Python erzeugen
       - name: Ensure icon placeholder (Windows)
         if: matrix.os == 'windows-latest'
-        shell: powershell
+        shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "frontend/public" | Out-Null
-          if (-not (Test-Path "frontend/public/icon.ico")) {
-            # Minimales gültiges ICO (16x16, 1-bit, leer)
-            $bytes = [byte[]](0x00,0x00,0x01,0x00,0x01,0x00,0x10,0x10,
-                              0x00,0x00,0x01,0x00,0x18,0x00,0x30,0x03,
-                              0x00,0x00,0x16,0x00,0x00,0x00)
-            [IO.File]::WriteAllBytes("frontend/public/icon.ico", $bytes)
-          }
+          python -c "import struct, os; os.makedirs('frontend/public', exist_ok=True); bmp = struct.pack('<IiiHHIIiiII', 40, 1, 2, 1, 24, 0, 0, 0, 0, 0, 0) + bytes([255,255,255,0,0,0,0,0]); ico = struct.pack('<HHH', 0, 1, 1) + struct.pack('<BBBBHHIi', 1, 1, 0, 0, 1, 24, len(bmp), 22) + bmp; open('frontend/public/icon.ico', 'wb').write(ico)"
 
       - name: Package with electron-builder
         env:
