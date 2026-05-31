@@ -327,11 +327,16 @@ export function subscribeToJob(
   const url = `${BASE}/api/jobs/${jobId}/events`;
   const es = new EventSource(url);
 
+  // Verhindert, dass onerror nach einem intentionalen close() faelschlich
+  // einen Fehler meldet (passiert in einigen Browsern/Electron nach es.close()).
+  let intentionallyClosed = false;
+
   es.onmessage = (msg) => {
     try {
       const event: JobEvent = JSON.parse(msg.data);
       onEvent(event);
       if (event.type === "completed" || event.type === "error") {
+        intentionallyClosed = true;
         es.close();
         onDone?.();
       }
@@ -341,8 +346,10 @@ export function subscribeToJob(
   };
 
   es.onerror = () => {
+    if (intentionallyClosed) return; // Normales Ende nach completed/error – kein Fehler
     // EventSource versucht nach Fehlern automatisch neu zu verbinden.
     // Wir schliessen explizit und melden einen Fehler.
+    intentionallyClosed = true;
     es.close();
     onEvent({
       type: "error",
@@ -354,5 +361,8 @@ export function subscribeToJob(
   };
 
   // Cleanup-Funktion
-  return () => es.close();
+  return () => {
+    intentionallyClosed = true;
+    es.close();
+  };
 }

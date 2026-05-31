@@ -54,7 +54,7 @@ QUALITY_PRESETS = {
 
 FONT_SIZE_HEADING = 52
 FONT_SIZE_BODY = 36
-TEXT_PANEL_HEIGHT = 220
+TEXT_PANEL_WIDTH = 600   # Breite des rechten Textbereichs (bei 1920 px: 600 Bild = 1320)
 TEXT_BG_COLOR = (20, 20, 20)
 TEXT_FG_COLOR = (255, 255, 255)
 TEXT_PADDING = 30
@@ -77,18 +77,41 @@ def _load_font(size: int):
     return ImageFont.load_default()
 
 
+def _wrap_text(text: str, font, max_width: int, draw: ImageDraw.Draw) -> str:
+    """Bricht langen Text auf mehrere Zeilen um (passend zu max_width Pixel)."""
+    words = text.split()
+    lines: list[str] = []
+    current: list[str] = []
+    for word in words:
+        test = " ".join(current + [word])
+        bbox = draw.textbbox((0, 0), test, font=font)
+        if bbox[2] - bbox[0] > max_width and current:
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        lines.append(" ".join(current))
+    return "\n".join(lines) if lines else text
+
+
 def create_text_panel_image(heading: str, body: str, width: int, height: int) -> Image.Image:
-    """Erstellt ein PIL-Bild mit Ueberschrift und Body-Text."""
+    """Erstellt ein PIL-Bild mit Ueberschrift und Body-Text (mit Zeilenumbruch)."""
     img = Image.new("RGB", (width, height), TEXT_BG_COLOR)
     draw = ImageDraw.Draw(img)
 
     font_h = _load_font(FONT_SIZE_HEADING)
     font_b = _load_font(FONT_SIZE_BODY)
+    max_w = width - 2 * TEXT_PADDING
 
     y = TEXT_PADDING
-    draw.text((TEXT_PADDING, y), heading, fill=TEXT_FG_COLOR, font=font_h)
-    y += FONT_SIZE_HEADING + 16
-    draw.text((TEXT_PADDING, y), body, fill=(200, 200, 200), font=font_b)
+    wrapped_h = _wrap_text(heading, font_h, max_w, draw)
+    draw.multiline_text((TEXT_PADDING, y), wrapped_h, fill=TEXT_FG_COLOR, font=font_h, spacing=6)
+    h_line_count = wrapped_h.count("\n") + 1
+    y += h_line_count * (FONT_SIZE_HEADING + 6) + 16
+
+    wrapped_b = _wrap_text(body, font_b, max_w, draw)
+    draw.multiline_text((TEXT_PADDING, y), wrapped_b, fill=(200, 200, 200), font=font_b, spacing=8)
 
     return img
 
@@ -108,17 +131,38 @@ def build_scene_clip(
     scene_idx: int,
     tts_slow: bool = False,
 ):
-    """Erstellt einen zusammengesetzten MoviePy-Clip fuer eine Szene."""
-    text_panel: TextPanel = scene.texts.get(lang, TextPanel())
+    """Erstellt einen zusammengesetzten MoviePy-Clip fuer eine Szene.
 
-    # ── Frames als Slideshow ───────────────────────────────────────────────────
+    Layout  : Bild links (W - TEXT_PANEL_WIDTH), Textbereich rechts (TEXT_PANEL_WIDTH).
+    Dauer   : mindestens scene.duration_seconds, aber nie kuerzer als das TTS-Audio
+              (Szenenwechsel erst wenn der gesprochene Text fertig ist).
+    """
+    text_panel: TextPanel = scene.texts.get(lang, TextPanel())
+    IMAGE_W = W - TEXT_PANEL_WIDTH
+
+    # ── 1. TTS zuerst generieren – bestimmt die tatsaechliche Szenen-Dauer ────
+    audio_clip = None
+    actual_duration = scene.duration_seconds
+    speaker_text = text_panel.speaker_notes or text_panel.body
+    if speaker_text.strip():
+        try:
+            tts_path = tmp_dir / f"tts_{scene_idx}_{lang}.mp3"
+            create_tts_audio(speaker_text, lang, tts_path, slow=tts_slow)
+            raw_audio = AudioFileClip(str(tts_path))
+            audio_clip = raw_audio
+            # Szene dauert mindestens so lang wie das gesprochene Audio
+            actual_duration = max(scene.duration_seconds, raw_audio.duration)
+        except Exception as exc:
+            print(f"  [WARN] TTS fehlgeschlagen fuer Szene {scene.scene_id}: {exc}", file=sys.stderr)
+
+    # ── 2. Frames als Slideshow (links) ───────────────────────────────────────
     frame_clips = []
     image_group = scene.image_group or (
         [scene.start_frame] if scene.start_frame else []
     )
 
     if image_group:
-        frame_dur = scene.duration_seconds / max(len(image_group), 1)
+        frame_dur = actual_duration / max(len(image_group), 1)
         for fname in image_group:
             fp = frames_dir / fname
             if not fp.exists():
@@ -126,44 +170,30 @@ def build_scene_clip(
             clip = (
                 ImageClip(str(fp))
                 .with_duration(frame_dur)
-                .resized((W, H - TEXT_PANEL_HEIGHT))
+                .resized((IMAGE_W, H))
             )
             frame_clips.append(clip)
 
     if not frame_clips:
-        # Platzhalter: schwarzes Bild
-        placeholder = Image.new("RGB", (W, H - TEXT_PANEL_HEIGHT), (0, 0, 0))
+        placeholder = Image.new("RGB", (IMAGE_W, H), (0, 0, 0))
         tmp_ph = tmp_dir / f"placeholder_{scene_idx}.jpg"
         placeholder.save(str(tmp_ph))
-        frame_clips = [ImageClip(str(tmp_ph)).with_duration(scene.duration_seconds)]
+        frame_clips = [ImageClip(str(tmp_ph)).with_duration(actual_duration)]
 
-    from moviepy import concatenate_videoclips as _concat
-    slideshow = _concat(frame_clips).with_position(("center", 0))
+    slideshow = concatenate_videoclips(frame_clips).with_position((0, 0))
 
-    # ── Text-Panel ─────────────────────────────────────────────────────────────
-    panel_img = create_text_panel_image(text_panel.heading, text_panel.body, W, TEXT_PANEL_HEIGHT)
+    # ── 3. Text-Panel (rechts) ────────────────────────────────────────────────
+    panel_img = create_text_panel_image(text_panel.heading, text_panel.body, TEXT_PANEL_WIDTH, H)
     tmp_panel = tmp_dir / f"panel_{scene_idx}_{lang}.jpg"
     panel_img.save(str(tmp_panel))
-    panel_clip = ImageClip(str(tmp_panel)).with_duration(scene.duration_seconds).with_position(("center", H - TEXT_PANEL_HEIGHT))
+    panel_clip = (
+        ImageClip(str(tmp_panel))
+        .with_duration(actual_duration)
+        .with_position((IMAGE_W, 0))
+    )
 
-    # ── TTS Audio ──────────────────────────────────────────────────────────────
-    audio_clip = None
-    speaker_text = text_panel.speaker_notes or text_panel.body
-    if speaker_text.strip():
-        try:
-            tts_path = tmp_dir / f"tts_{scene_idx}_{lang}.mp3"
-            create_tts_audio(speaker_text, lang, tts_path, slow=tts_slow)
-            raw_audio = AudioFileClip(str(tts_path))
-            # Kuerze oder verlängere Audio auf Szenen-Dauer
-            if raw_audio.duration > scene.duration_seconds:
-                audio_clip = raw_audio.subclipped(0, scene.duration_seconds)
-            else:
-                audio_clip = raw_audio
-        except Exception as exc:
-            print(f"  [WARN] TTS fehlgeschlagen fuer Szene {scene.scene_id}: {exc}", file=sys.stderr)
-
-    # ── Composite ──────────────────────────────────────────────────────────────
-    composite = CompositeVideoClip([slideshow, panel_clip], size=(W, H)).with_duration(scene.duration_seconds)
+    # ── 4. Composite ──────────────────────────────────────────────────────────
+    composite = CompositeVideoClip([slideshow, panel_clip], size=(W, H)).with_duration(actual_duration)
     if audio_clip is not None:
         composite = composite.with_audio(audio_clip)
 

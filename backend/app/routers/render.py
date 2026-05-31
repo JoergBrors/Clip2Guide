@@ -36,6 +36,10 @@ _RE_LANG  = re.compile(r"===\s*Rendern:\s*\[(\w+)\]", re.IGNORECASE)
 
 
 async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
+    # Kurze Pause damit der SSE-Client sicher verbunden ist bevor Events gesendet werden.
+    # Der Background-Task startet sofort nach der HTTP-Response, der Browser braucht
+    # noch einen Roundtrip um die SSE-Verbindung aufzubauen.
+    await asyncio.sleep(1.0)
     try:
         await _send(job_id, "progress", "render", "Lade Storyboard...", 5)
         if not _storyboard_svc.exists(video_id):
@@ -54,13 +58,24 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
 
         await _send(job_id, "log", "render", f"$ {' '.join(cmd)}", 10)
 
-        # Subprocess mit gestreamter Ausgabe starten
+        # Subprocess mit gestreamter Ausgabe starten.
+        # Hinweis: stderr=STDOUT fuehrt auf Windows (ProactorEventLoop) zu einem
+        # asyncio-Bug, bei dem der StreamReader nach der ersten Zeile keine weiteren
+        # Daten mehr liest. Daher stderr separat als PIPE mit eigenem Drain-Task.
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,  # stderr in stdout mergen
+            stderr=asyncio.subprocess.PIPE,  # Separater Drain – kein STDOUT-Merge
             cwd=str(settings.project_root / "backend"),
         )
+
+        # Stderr im Hintergrund verwerfen (Config-Meldungen, [WARN]-Hinweise).
+        async def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            async for _ in proc.stderr:
+                pass
+
+        drain_task = asyncio.create_task(_drain_stderr())
 
         total_langs  = len(req.languages)
         current_lang_idx = 0
@@ -99,6 +114,7 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
                 await _send(job_id, "progress", "render", status_msg, min(pct, 95))
 
         await proc.wait()
+        await drain_task
 
         if proc.returncode != 0:
             raise RuntimeError(f"Rendering fehlgeschlagen (Exit-Code {proc.returncode})")
