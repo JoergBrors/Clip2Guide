@@ -1,0 +1,211 @@
+# Clip2Guide – Release-Prozess
+
+## Versionierung
+
+Die Version der App wird an **einer einzigen Stelle** gepflegt:
+
+**`package.json`** → `"version": "0.1.0"`
+
+electron-builder liest diese Version automatisch und verwendet sie für:
+- Installer-Dateinamen (`Clip2Guide Setup 0.1.0.exe`, `Clip2Guide-0.1.0.dmg`)
+- In-App-Versionsnummer (`window.clip2guide.getVersion()`)
+- GitHub-Release-Tag (muss manuell übereinstimmen)
+
+---
+
+## CI/CD-Workflow
+
+Datei: `.github/workflows/release.yml`
+
+### Auslöser
+
+```yaml
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+```
+
+Der Workflow startet ausschließlich bei einem Git-Tag im Format `v0.1.0`.
+Pushes auf `main` ohne Tag lösen **keinen** Release aus.
+
+### Jobs
+
+Der Workflow besteht aus zwei Phasen: **Build** (Matrix) → **Publish**.
+
+#### Phase 1: Build-Matrix
+
+| Matrix-Eintrag | Runner | Befehl | Artefakt-Name |
+|---|---|---|---|
+| `win x64` | `windows-latest` | `npx electron-builder --win --x64 --publish never` | `installer-win-x64` |
+| `mac x64` | `macos-latest` | `npx electron-builder --mac --x64 --publish never` | `installer-mac-x64` |
+| `mac arm64` | `macos-latest` | `npx electron-builder --mac --arm64 --publish never` | `installer-mac-arm64` |
+
+> **Warum zwei separate macOS-Jobs?**
+> electron-builder hängt beim Bau von DMGs eine Disk-Image-Partition unter
+> `/Volumes/Clip2Guide 0.1.0` aus. Würden x64 und arm64 im selben Job parallel
+> gebaut, entstehen zwei Volumes mit identischem Namen → `hdiutil`-Fehler.
+> Separate Jobs laufen auf separaten Runner-VMs und vermeiden den Konflikt.
+
+> **Warum `macos-latest` für x64?**
+> GitHub hat `macos-13` (Intel-Runner) per Mai 2025 abgekündigt.
+> `macos-latest` ist ein Apple-Silicon-Runner. electron-builder kann jedoch
+> auch dort per Cross-Compilation ein x64-DMG erzeugen (`--x64`-Flag).
+
+#### Build-Schritte (alle Plattformen)
+
+1. `actions/checkout@v4`
+2. `actions/setup-node@v4` (Node.js 20)
+3. `actions/setup-python@v5` (Python 3.13) + `pip install -r requirements.txt`
+4. *(macOS only)* `iconutil -c icns icon/icon.iconset -o icon/icon.icns`
+5. `npm ci`
+6. `npx electron-builder --{platform} --{arch} --publish never`
+7. `actions/upload-artifact@v4` – Installer-Dateien hochladen
+
+#### Phase 2: Publish
+
+```yaml
+release:
+  needs: build
+  runs-on: ubuntu-latest
+```
+
+Läuft erst, wenn **alle** Build-Jobs erfolgreich waren.
+
+Schritte:
+1. Artefakte aller drei Matrix-Jobs herunterladen
+2. `softprops/action-gh-release@v2` – GitHub Release mit allen Installer-Dateien erstellen
+
+**GitHub Release enthält:**
+- `Clip2Guide Setup {version}.exe` (Windows x64 NSIS-Installer)
+- `Clip2Guide-{version}.dmg` (macOS x64 DMG)
+- `Clip2Guide-{version}-arm64.dmg` (macOS arm64 / Apple Silicon DMG)
+
+---
+
+## Neuen Release erstellen
+
+### Schritt-für-Schritt
+
+```powershell
+# 1. Version in package.json anpassen (manuell editieren)
+#    "version": "0.2.0"
+
+# 2. Commit auf main pushen
+git add package.json
+git commit -m "chore: bump version to 0.2.0"
+git push origin main
+
+# 3. Tag erstellen und pushen → löst den Workflow aus
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+### Was dann passiert
+
+1. Alle drei Build-Jobs starten parallel
+2. Windows-Build dauert typisch 4–6 Minuten
+3. macOS-Builds dauern typisch 5–8 Minuten je Job
+4. Sobald alle drei fertig sind, startet `release`
+5. GitHub Release wird automatisch angelegt (als Draft oder direkt published,
+   abhängig von der `softprops/action-gh-release`-Konfiguration)
+
+---
+
+## Paketierungs-Konfiguration (electron-builder.yml)
+
+```yaml
+appId: de.joergbrors.clip2guide
+productName: Clip2Guide
+directories:
+  output: dist
+  buildResources: icon
+
+files:
+  - dist/renderer/**/*
+  - dist/electron/**/*
+  - backend/**/*
+  - tools/**/*
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+mac:
+  target:
+    - target: dmg
+  icon: icon/icon.icns
+  hardenedRuntime: false
+  gatekeeperAssess: false
+```
+
+### Wichtige Hinweise zur macOS-Konfiguration
+
+- **`hardenedRuntime: false`**: Die App ist **nicht** von Apple signiert.
+  Benutzer müssen den ersten Start manuell freigeben (Systemeinstellungen →
+  Datenschutz & Sicherheit → „Trotzdem öffnen").
+- **Kein Apple-Developer-Konto** / kein Notarisierungsprozess konfiguriert.
+- Die `arch`-Liste wurde **aus `electron-builder.yml` entfernt** – die Architektur
+  wird ausschließlich über das CLI-Flag `--x64` / `--arm64` im Workflow gesteuert.
+
+---
+
+## Lokaler Test-Build
+
+### Windows
+
+```powershell
+npm run build:dist
+# Ausgabe: dist/Clip2Guide Setup 0.1.0.exe
+```
+
+### macOS (aktuelle Architektur)
+
+```bash
+npm run build:dist
+# Ausgabe: dist/Clip2Guide-0.1.0.dmg  (arm64 auf Apple Silicon)
+```
+
+### macOS (Cross-Compilation x64 auf Apple Silicon)
+
+```bash
+npx electron-builder --mac --x64
+```
+
+---
+
+## Bekannte Probleme und Lösungen
+
+| Problem | Ursache | Lösung |
+|---|---|---|
+| `hdiutil detach: Resource busy` | x64 und arm64 werden im selben Job gebaut, beide mounten `/Volumes/Clip2Guide {version}` | Zwei separate Matrix-Jobs (je ein Arch pro Job) |
+| `macos-13` runner not available | GitHub hat `macos-13` per Mai 2025 eingestellt | `macos-latest` verwenden (Apple Silicon, unterstützt Cross-Compilation) |
+| Leere GitHub Releases-Seite | Build-Job(s) sind fehlgeschlagen → `release`-Job startet nicht | Build-Fehler beheben, neuen Tag pushen |
+| Windows-NSIS signiert nicht | Kein Code-Signing-Zertifikat konfiguriert | SmartScreen-Warnung wird Benutzern angezeigt; akzeptabel für interne Tools |
+| macOS Gatekeeper blockiert App | `hardenedRuntime: false`, keine Notarisierung | Benutzer: Systemeinstellungen → Sicherheit → „Trotzdem öffnen" |
+| `icon.icns` fehlt beim macOS-Build | `icon.icns` ist nicht im Repo (wird im CI generiert) | CI-Schritt `iconutil -c icns icon/icon.iconset -o icon/icon.icns` ist im Workflow |
+
+---
+
+## Artefakte und deren Lebensdauer
+
+GitHub Actions Artefakte (Zwischen-Ergebnisse der Build-Matrix) werden nach
+**90 Tagen** automatisch gelöscht. Die eigentlichen Installer in der
+**GitHub Release** bleiben dauerhaft erhalten.
+
+---
+
+## Versionierungs-Konvention
+
+Das Projekt nutzt Semantic Versioning (`MAJOR.MINOR.PATCH`):
+
+| Änderungstyp | Version erhöhen |
+|---|---|
+| Breaking Change (z.B. .env-Format geändert) | MAJOR |
+| Neue Funktion (neuer Workflow-Schritt, neuer Provider) | MINOR |
+| Bugfix, Dokumentation, Refactoring | PATCH |
