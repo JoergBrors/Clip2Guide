@@ -51,6 +51,12 @@ contextBridge.exposeInMainWorld("setupAPI", {
   },
 });
 
+/** Uninstall-API */
+contextBridge.exposeInMainWorld("appAPI", {
+  uninstall: (deleteUserData: boolean): Promise<{ confirmed: boolean }> =>
+    ipcRenderer.invoke("app:uninstall", deleteUserData),
+});
+
 export type Clip2GuideApi = {
   backendUrl: string;
   openPath: (filePath: string) => Promise<void>;

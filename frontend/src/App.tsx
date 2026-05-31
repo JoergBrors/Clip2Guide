@@ -121,6 +121,18 @@ export default function App(): React.ReactElement {
             </button>
           ))}
         </nav>
+        <button
+          style={styles.uninstallBtn}
+          title="Clip2Guide deinstallieren"
+          onClick={() => {
+            const deleteData = window.confirm(
+              "Auch Benutzerdaten löschen?\n(venv, Workspace, Tools in %LOCALAPPDATA%\\Clip2Guide)\n\nOK = löschen   Abbrechen = behalten"
+            );
+            (window as any).appAPI?.uninstall(deleteData);
+          }}
+        >
+          Deinstallieren
+        </button>
       </header>
 
       <main style={styles.main}>
@@ -229,6 +241,16 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#0d47a1",
     border: "1px solid #1565c0",
     color: "#fff",
+  },
+  uninstallBtn: {
+    marginLeft: "auto",
+    padding: "4px 12px",
+    background: "transparent",
+    border: "1px solid #c62828",
+    color: "#ef9a9a",
+    borderRadius: 6,
+    cursor: "pointer",
+    fontSize: 12,
   },
   main: {
     flex: 1,

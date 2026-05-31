@@ -119,4 +119,42 @@ export function registerAll(ipcMain: IpcMain): void {
     }
     return result;
   });
+
+  // ── Deinstallation ─────────────────────────────────────────────────────────
+
+  /**
+   * Zeigt einen Bestätigungsdialog und startet dann den NSIS-Uninstaller.
+   * Gibt { confirmed: false } zurück wenn der Nutzer abbricht.
+   * deleteUserData: true  → löscht zusätzlich %LOCALAPPDATA%\Clip2Guide
+   */
+  ipcMain.handle("app:uninstall", async (_event, deleteUserData: boolean) => {
+    const { response } = await dialog.showMessageBox({
+      type: "warning",
+      buttons: ["Deinstallieren", "Abbrechen"],
+      defaultId: 1,
+      cancelId: 1,
+      title: "Clip2Guide deinstallieren",
+      message: deleteUserData
+        ? "Clip2Guide wird deinstalliert und alle Benutzerdaten (venv, Workspace, Tools) werden gelöscht. Fortfahren?"
+        : "Clip2Guide wird deinstalliert. Benutzerdaten bleiben erhalten. Fortfahren?",
+    });
+
+    if (response !== 0) return { confirmed: false };
+
+    if (deleteUserData && fs.existsSync(USER_LOCAL_DIR)) {
+      fs.rmSync(USER_LOCAL_DIR, { recursive: true, force: true });
+    }
+
+    // NSIS-Uninstaller liegt neben der App-EXE im Installationsverzeichnis
+    const uninstallerPath = path.join(
+      path.dirname(app.getPath("exe")),
+      "Uninstall Clip2Guide.exe"
+    );
+    if (fs.existsSync(uninstallerPath)) {
+      spawn(uninstallerPath, [], { detached: true, stdio: "ignore" }).unref();
+    }
+
+    app.quit();
+    return { confirmed: true };
+  });
 }
