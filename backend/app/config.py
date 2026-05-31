@@ -13,8 +13,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict
 
-# Projektverzeichnis = ../../.. relativ zu backend/app/config.py
-_PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
+# Projektverzeichnis:
+# Im paketierten Betrieb setzt Electron PROJECT_ROOT auf process.resourcesPath
+# (z.B. %LOCALAPPDATA%\Programs\Clip2Guide\resources), damit Werkzeuge und
+# Workspace relativ zum resources/-Ordner aufgelöst werden.
+# Im Dev-Modus fehlt PROJECT_ROOT → Fallback: 3 Ebenen über backend/app/config.py.
+_env_project_root = os.environ.get("PROJECT_ROOT", "")
+_PROJECT_ROOT: Path = (
+    Path(_env_project_root)
+    if _env_project_root
+    else Path(__file__).resolve().parent.parent.parent
+)
 
 # ── .env-Pfad ermitteln ────────────────────────────────────────────────────────
 # Im paketierten Electron-Betrieb setzt der Haupt-Prozess APP_ENV_FILE auf

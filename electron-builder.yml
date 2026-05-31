@@ -20,6 +20,8 @@ extraResources:
     to: initial.sh
   - from: localstuff/env.example
     to: env.example
+  - from: backend/requirements.txt
+    to: backend/requirements.txt
 
 # Dateien niemals einschließen
 # (tools/ und workspace/ werden bei erstem Start heruntergeladen/erzeugt)

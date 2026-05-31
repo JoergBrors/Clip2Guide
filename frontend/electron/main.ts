@@ -26,11 +26,20 @@ function startBackend(): void {
     return;
   }
 
-  const projectRoot = isDev
+  // In production: resourcesRoot = process.resourcesPath
+  //   (z.B. %LOCALAPPDATA%\Programs\Clip2Guide\resources)
+  // In dev:        resourcesRoot = Projektverzeichnis (3 Ebenen über dist/electron/)
+  const resourcesRoot = isDev
     ? path.resolve(__dirname, "../../..")
-    : path.dirname(app.getPath("exe"));
+    : process.resourcesPath;
 
-  const backendDir = path.join(projectRoot, "backend");
+  // initial.ps1 / initial.sh legt das venv unter <resourcesRoot>/backend/.venv an
+  const backendDir = path.join(resourcesRoot, "backend");
+  // uvicorn braucht das echte Dateisystem-Verzeichnis (nicht ASAR-virtuell)
+  const backendCwd = isDev
+    ? backendDir
+    : path.join(resourcesRoot, "app.asar.unpacked", "backend");
+
   const isWindows = process.platform === "win32";
   const venvPython = path.join(
     backendDir,
@@ -50,8 +59,8 @@ function startBackend(): void {
     venvPython,
     ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(BACKEND_PORT)],
     {
-      cwd: backendDir,
-      env: { ...process.env, APP_ENV_FILE: USER_ENV_FILE },
+      cwd: backendCwd,
+      env: { ...process.env, APP_ENV_FILE: USER_ENV_FILE, PROJECT_ROOT: resourcesRoot },
       stdio: ["ignore", "pipe", "pipe"],
     }
   );
