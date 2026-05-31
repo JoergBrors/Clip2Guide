@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Clip2Guide – Windows-Setup-Skript
+    Clip2Guide - Windows-Setup-Skript
 .DESCRIPTION
     Richtet Python-Umgebung, FFmpeg, Auto-Editor und Verzeichnisstruktur ein.
     Muss einmalig vor dem ersten Start ausgefuehrt werden.
@@ -39,7 +39,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# ── Hilfsfunktionen ──────────────────────────────────────────────────────────
+# Hilfsfunktionen
 
 function Write-Section {
     param([string]$Text)
@@ -72,9 +72,9 @@ function Download-File {
     }
 }
 
-# ── Pfade ─────────────────────────────────────────────────────────────────────
+# Pfade
 
-Write-Section "Clip2Guide – Initialisierung"
+Write-Section "Clip2Guide - Initialisierung"
 
 $Root = [System.IO.Path]::GetFullPath($Root)
 Write-Host "Root Directory  : $Root"
@@ -106,7 +106,7 @@ $OutputDir       = Join-Path $WorkspaceDir "output"
 $JobsDir         = Join-Path $WorkspaceDir "jobs"
 $LogsDir         = Join-Path $WorkspaceDir "logs"
 
-# ── Verzeichnisstruktur ────────────────────────────────────────────────────────
+# Verzeichnisstruktur
 
 $RequiredDirs = @(
     $ToolsDir, $FfmpegDir, $AutoEditorDir,
@@ -124,7 +124,7 @@ foreach ($Dir in $RequiredDirs) {
 
 Write-Host "[OK] Verzeichnisstruktur angelegt"
 
-# ── Python Umgebung ────────────────────────────────────────────────────────────
+# Python Umgebung
 
 Write-Section "Python Umgebung"
 
@@ -158,7 +158,7 @@ if (-not $SkipPythonInstall) {
     python -m pip install --upgrade -r $RequirementsPath
 }
 
-# ── FFmpeg ─────────────────────────────────────────────────────────────────────
+# FFmpeg
 
 Write-Section "FFmpeg"
 
@@ -205,7 +205,7 @@ if (-not $SkipFFmpeg) {
     Write-Host "[OK] IMAGEIO_FFMPEG_EXE gesetzt: $FfmpegExe"
 }
 
-# ── Auto-Editor ────────────────────────────────────────────────────────────────
+# Auto-Editor
 
 Write-Section "Auto-Editor"
 
@@ -225,7 +225,7 @@ if (-not $SkipAutoEditor) {
     }
 }
 
-# ── .env Konfiguration ─────────────────────────────────────────────────────────
+# .env Konfiguration
 
 Write-Section ".env Konfiguration"
 
@@ -238,13 +238,13 @@ if (-not (Test-Path $EnvPath)) {
         Write-Host "[OK] .env aus .env.example erzeugt"
         Write-Host "     => Bitte API-Schluessel eintragen: $EnvPath"
     } else {
-        Write-Warning ".env.example nicht gefunden – .env wurde nicht erzeugt. Bitte manuell anlegen."
+        Write-Warning ".env.example nicht gefunden - .env wurde nicht erzeugt. Bitte manuell anlegen."
     }
 } else {
     Write-Host "[OK] .env bereits vorhanden, wird nicht ueberschrieben"
 }
 
-# ── Node / Electron ────────────────────────────────────────────────────────────
+# Node / Electron
 
 Write-Section "Node / Electron"
 
@@ -259,7 +259,7 @@ if (-not $SkipNodeInstall) {
     }
 }
 
-# ── Tests ──────────────────────────────────────────────────────────────────────
+# Tests
 
 Write-Section "Selbsttest"
 
@@ -268,11 +268,8 @@ $AnyFailed = $false
 if (-not $SkipPythonInstall) {
     Write-Host "Python-Module..."
     try {
-        & (Join-Path $VenvPath "Scripts\python.exe") -c @"
-import fastapi, pydantic, cv2, moviepy, PIL, dotenv
-print('[OK] Kernmodule geladen')
-print(f'     MoviePy {moviepy.__version__}  |  Pillow {PIL.__version__}')
-"@
+        $ModuleCheck = "import fastapi, pydantic, cv2, moviepy, PIL, dotenv; print('[OK] Kernmodule geladen'); print(f'     MoviePy {moviepy.__version__}  |  Pillow {PIL.__version__}')"
+        & (Join-Path $VenvPath "Scripts\python.exe") -c $ModuleCheck
     } catch {
         Write-Warning "[FAIL] Python-Modultest fehlgeschlagen: $_"
         $AnyFailed = $true
@@ -308,7 +305,7 @@ if ($AnyFailed) {
     Write-Warning "Mindestens ein Test ist fehlgeschlagen. Bitte Ausgabe pruefen."
 }
 
-# ── Fertig ─────────────────────────────────────────────────────────────────────
+# Fertig
 
 Write-Section "Fertig"
 
