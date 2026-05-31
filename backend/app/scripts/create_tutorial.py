@@ -37,6 +37,32 @@ from moviepy import (
 )
 from PIL import Image, ImageDraw, ImageFont
 
+try:
+    import proglog as _proglog
+    class _StdoutLogger(_proglog.ProgressBarLogger):
+        """Leitet MoviePy-Frame-Fortschritt auf stdout weiter (fuer SSE-Streaming).
+        MoviePy 2.x verwendet iter_bar(frame_index=...) -> bar-Name ist 'frame_index'.
+        """
+        def __init__(self, lang: str) -> None:
+            super().__init__(init_state=None)
+            self._lang = lang
+            self._last_pct = -1
+
+        def bars_callback(self, bar, attr, value, old_value=None):
+            # MoviePy 2.x: bar="frame_index", attr="index"
+            if bar != "frame_index" or attr != "index":
+                return
+            bar_state = self.bars.get(bar) or {}
+            total = bar_state.get("total") or 1
+            pct = int(100 * value / max(total, 1))
+            # Nur bei 5%-Schritten oder am Ende ausgeben (reduziert SSE-Traffic)
+            if pct >= self._last_pct + 5 or value >= total - 1:
+                self._last_pct = pct
+                print(f"  [{self._lang}] Encoding: Frame {value}/{total} ({pct}%)", flush=True)
+    _HAS_PROGLOG = True
+except Exception:
+    _HAS_PROGLOG = False
+
 # gTTS fuer TTS-Audio
 from gtts import gTTS
 
@@ -47,9 +73,9 @@ H = settings.output_video_height
 FPS = 25  # wird per CLI-Argument ueberschrieben
 
 QUALITY_PRESETS = {
-    "schnell":     {"crf": 28, "preset": "fast"},
-    "ausgewogen":  {"crf": 23, "preset": "medium"},
-    "beste":       {"crf": 18, "preset": "slow"},
+    "schnell":     {"crf": 28, "preset": "veryfast"},
+    "ausgewogen":  {"crf": 23, "preset": "faster"},
+    "beste":       {"crf": 18, "preset": "medium"},
 }
 
 FONT_SIZE_HEADING = 52
@@ -238,20 +264,22 @@ def render_language(
         if not clips:
             raise ValueError("Keine Szenen zum Rendern gefunden.")
 
-        final = concatenate_videoclips(clips, method="compose")
+        final = concatenate_videoclips(clips, method="chain")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        print(f"  Schreibe Video: {output_path} (FPS={fps}, CRF={q['crf']}, Preset={q['preset']})", flush=True)
+        total_video_frames = int(final.duration * fps)
+        print(f"  Schreibe Video: {output_path} (FPS={fps}, CRF={q['crf']}, Preset={q['preset']}, Frames={total_video_frames})", flush=True)
         print(f"  Kodiere Video ({fps} fps, CRF={q['crf']}, Preset={q['preset']})...", flush=True)
+        _logger = _StdoutLogger(lang) if _HAS_PROGLOG else None
         final.write_videofile(
             str(output_path),
             fps=fps,
             codec="libx264",
             audio_codec="aac",
-            ffmpeg_params=["-crf", str(q["crf"]), "-preset", q["preset"]],
-            logger=None,
+            ffmpeg_params=["-crf", str(q["crf"]), "-preset", q["preset"], "-threads", "0"],
+            logger=_logger,
         )
-        print(f"  Videoencoding abgeschlossen.", flush=True)
+        print(f"  [{lang}] Videoencoding abgeschlossen ({total_video_frames} Frames).", flush=True)
         # Alle Clips explizit schliessen damit Windows die Datei-Handles freigibt
         for clip in clips:
             try:
