@@ -37,6 +37,9 @@ win:
     - target: nsis
       arch:
         - x64
+    - target: portable
+      arch:
+        - x64
   icon: frontend/public/icon.ico
 
 nsis:
