@@ -3,7 +3,7 @@ name: Setup on tag
 on:
   push:
     tags:
-      - "*"
+      - "ci-*"    # nur explizite CI-Test-Tags, z.B. ci-test1 (nicht v*.*.*)
   workflow_dispatch:
     inputs:
       ai_provider:
@@ -63,14 +63,8 @@ jobs:
       - name: Write .env from secrets
         shell: pwsh
         run: |
-          $provider = "${env:AI_PROVIDER}"
-          if ($provider -eq "gemini" -and [string]::IsNullOrWhiteSpace("${env:GEMINI_API_KEY}")) {
-            throw "GEMINI_API_KEY repository secret is required when AI_PROVIDER=gemini."
-          }
-          if ($provider -eq "openai" -and [string]::IsNullOrWhiteSpace("${env:OPENAI_API_KEY}")) {
-            throw "OPENAI_API_KEY repository secret is required when AI_PROVIDER=openai."
-          }
-
+          # API-Keys sind optional – kein Key ist im CI zwingend erforderlich.
+          # Secrets werden eingetragen wenn sie gesetzt sind, sonst leer gelassen.
           @(
             "APP_ENV=ci"
             "APP_HOST=127.0.0.1"
