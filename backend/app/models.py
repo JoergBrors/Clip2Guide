@@ -20,6 +20,7 @@ class EditMode(str, Enum):
 class AiProvider(str, Enum):
     GEMINI = "gemini"
     OPENAI = "openai"
+    AZURE_OPENAI = "azure_openai"
 
 
 # ── Storyboard / Szenenstruktur ───────────────────────────────────────────────
@@ -37,6 +38,10 @@ class Scene(BaseModel):
     start_frame: str = Field(..., description="Dateiname des ersten Frames, z.B. 'frame_001.jpg'")
     end_frame: Optional[str] = Field(None, description="Dateiname des letzten Frames (inklusiv)")
     image_group: List[str] = Field(default_factory=list, description="Liste aller Frame-Dateinamen dieser Szene")
+    image_prompts: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Dateiname -> optionale KI-Anweisung, die beim Neu-Schreiben in den Prompt einfließt."
+    )
     texts: Dict[str, TextPanel] = Field(
         default_factory=dict,
         description="Sprachcode -> TextPanel, z.B. {'de': TextPanel(...)}"
@@ -121,6 +126,14 @@ class RewriteSceneRequest(BaseModel):
     languages: List[str] = Field(default_factory=lambda: ["de"])
     ai_provider: Optional[AiProvider] = None
     ai_model: Optional[str] = None
+    current_texts: Optional[Dict[str, TextPanel]] = Field(
+        None,
+        description="Vom Nutzer manuell bearbeitete Texte der Szene (heading/body/speaker_notes je Sprache)."
+    )
+    image_prompts: Optional[Dict[str, str]] = Field(
+        None,
+        description="Dateiname -> optionale KI-Anweisung pro Bild."
+    )
 
 
 # ── Response-Modelle ──────────────────────────────────────────────────────────

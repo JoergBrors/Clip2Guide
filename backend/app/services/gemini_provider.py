@@ -50,23 +50,21 @@ class GeminiProvider(AiProviderBase):
         video_id: str,
         prompt_extra: str = "",
     ) -> StoryboardJson:
-        prompt = build_analysis_prompt(languages, video_id, prompt_extra)
-
         # Bilder laden (max. 20 Frames um Token-Limit einzuhalten)
         sample_paths = frame_paths[:: max(1, len(frame_paths) // 20)][:20]
+        total = len(sample_paths)
 
-        # Bilder als inline Parts aufbereiten
-        image_parts = [
-            types.Part.from_bytes(
-                data=p.read_bytes(),
-                mime_type="image/jpeg",
-            )
-            for p in sample_paths
-        ]
+        prompt = build_analysis_prompt(languages, video_id, prompt_extra, num_frames=total)
+
+        # Bilder als inline Parts aufbereiten – mit Nummernmarkierung
+        parts: list = []
+        for i, p in enumerate(sample_paths, 1):
+            parts.append(types.Part.from_text(text=f"[Bild {i} von {total}]"))
+            parts.append(types.Part.from_bytes(data=p.read_bytes(), mime_type="image/jpeg"))
 
         response = self._client.models.generate_content(
             model=self._model_name,
-            contents=[prompt, *image_parts],
+            contents=[prompt, *parts],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
             ),

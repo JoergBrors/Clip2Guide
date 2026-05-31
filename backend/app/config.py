@@ -44,6 +44,18 @@ else:
         file=sys.stderr,
     )
 
+_azure_key = os.getenv("AZURE_OPENAI_API_KEY", "")
+if _azure_key:
+    print(
+        f"[config] AZURE_OPENAI_API_KEY: gesetzt ({len(_azure_key)} Zeichen)",
+        file=sys.stderr,
+    )
+else:
+    print(
+        "[config] AZURE_OPENAI_API_KEY: nicht gesetzt (optional)",
+        file=sys.stderr,
+    )
+
 
 def _resolve(raw: str, fallback: str) -> Path:
     """Gibt einen absoluten Path zurueck. Relative Werte werden gegen PROJECT_ROOT aufgeloest."""
@@ -60,11 +72,17 @@ class Settings(BaseModel):
     app_port: int = int(os.getenv("APP_PORT", "8787"))
 
     # AI
+    # Kommagetrennte Liste aktiver Provider, z.B. "gemini,azure_openai"
     ai_provider: str = os.getenv("AI_PROVIDER", "gemini")
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1")
+    # Azure OpenAI
+    azure_openai_api_key: str = os.getenv("AZURE_OPENAI_API_KEY", "")
+    azure_openai_endpoint: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    azure_openai_deployment: str = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1-mini")
+    azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
 
     # Tools
     ffmpeg_path: Path = _resolve("FFMPEG_PATH", "./tools/ffmpeg/bin/ffmpeg.exe")
@@ -101,6 +119,11 @@ class Settings(BaseModel):
     @property
     def project_root(self) -> Path:
         return _PROJECT_ROOT
+
+    @property
+    def ai_providers(self) -> list[str]:
+        """Liste aller in AI_PROVIDER konfigurierten Provider (kommagetrennt)."""
+        return [p.strip() for p in self.ai_provider.split(",") if p.strip()]
 
 
 settings = Settings()

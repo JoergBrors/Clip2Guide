@@ -38,6 +38,13 @@ OPENAI_VISION_MODELS: List[str] = [
     "o3",
 ]
 
+AZURE_OPENAI_VISION_MODELS: List[str] = [
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-4o",
+    "gpt-4o-mini",
+]
+
 
 def _list_gemini_models() -> List[str]:
     """Listet alle Gemini-Modelle auf, die generateContent unterstuetzen."""
@@ -53,6 +60,22 @@ def _list_gemini_models() -> List[str]:
         and "robotics" not in (m.name or "")
     ]
     return sorted(set(names))
+
+
+@router.get("/ai/providers")
+async def list_providers() -> dict:
+    """Gibt die in AI_PROVIDER konfigurierten Provider zurueck (kommagetrennte Liste in .env)."""
+    PROVIDER_LABELS = {
+        AiProvider.GEMINI.value: "Google Gemini",
+        AiProvider.OPENAI.value: "OpenAI",
+        AiProvider.AZURE_OPENAI.value: "Azure OpenAI",
+    }
+    result = []
+    for p in settings.ai_providers:
+        if p not in PROVIDER_LABELS:
+            continue
+        result.append({"id": p, "label": PROVIDER_LABELS[p]})
+    return {"providers": result, "default": result[0]["id"] if result else "gemini"}
 
 
 @router.get("/ai/models")
@@ -72,6 +95,16 @@ async def list_models(provider: str = Query(default="gemini")) -> dict:
         if not settings.openai_api_key:
             raise HTTPException(status_code=400, detail="OPENAI_API_KEY ist nicht gesetzt.")
         return {"provider": provider, "models": OPENAI_VISION_MODELS, "default": settings.openai_model}
+    elif provider == AiProvider.AZURE_OPENAI.value:
+        if not settings.azure_openai_api_key:
+            raise HTTPException(status_code=400, detail="AZURE_OPENAI_API_KEY ist nicht gesetzt.")
+        if not settings.azure_openai_endpoint:
+            raise HTTPException(status_code=400, detail="AZURE_OPENAI_ENDPOINT ist nicht gesetzt.")
+        return {
+            "provider": provider,
+            "models": AZURE_OPENAI_VISION_MODELS,
+            "default": settings.azure_openai_deployment,
+        }
     else:
         raise HTTPException(status_code=400, detail=f"Unbekannter Provider: {provider}")
 
@@ -87,6 +120,80 @@ def _get_provider(req: AnalyzeRequest):
     elif provider_name == AiProvider.OPENAI.value:
         from app.services.openai_provider import OpenAiProvider
         return OpenAiProvider(model=model)
+    elif provider_name == AiProvider.AZURE_OPENAI.value:
+        from app.services.azure_openai_provider import AzureOpenAiProvider
+        return AzureOpenAiProvider(model=model)
+    else:
+        raise ValueError(f"Unbekannter AI-Provider: {provider_name}")
+
+
+def _is_throttle_error(exc: Exception) -> bool:
+    """Erkennt 503/429 Throttling-Fehler aller KI-Anbieter."""
+    msg = str(exc).lower()
+    return any(k in msg for k in [
+        "503", "429", "high demand", "overloaded", "rate limit", "rate_limit",
+        "quota", "too many requests", "resource exhausted", "unavailable", "capacity",
+    ])
+
+
+def _get_effective_model(provider_name: str, model_override: str | None) -> str:
+    """Gibt den tatsaechlich verwendeten Modellnamen zurueck."""
+    if model_override:
+        return model_override
+    if provider_name == AiProvider.GEMINI.value:
+        return settings.gemini_model
+    elif provider_name == AiProvider.OPENAI.value:
+        return settings.openai_model
+    elif provider_name == AiProvider.AZURE_OPENAI.value:
+        return settings.azure_openai_deployment
+    return "unknown"
+
+
+def _throttle_alternatives(current_provider: str, current_model: str) -> list[dict]:
+    """Baut eine Liste alternativer Modelle fuer den Throttle-Dialog."""
+    alternatives: list[dict] = []
+    provider_labels: dict[str, str] = {
+        AiProvider.GEMINI.value: "Google Gemini",
+        AiProvider.OPENAI.value: "OpenAI",
+        AiProvider.AZURE_OPENAI.value: "Azure OpenAI",
+    }
+    same_provider_models: dict[str, list[str]] = {
+        AiProvider.GEMINI.value: ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash"],
+        AiProvider.OPENAI.value: OPENAI_VISION_MODELS,
+        AiProvider.AZURE_OPENAI.value: AZURE_OPENAI_VISION_MODELS,
+    }
+    # Andere Modelle desselben Providers
+    for m in same_provider_models.get(current_provider, []):
+        if m != current_model:
+            alternatives.append({
+                "provider": current_provider,
+                "model": m,
+                "label": f"{provider_labels.get(current_provider, current_provider)} · {m}",
+            })
+    # Andere konfigurierte Provider mit Default-Modell
+    provider_defaults: dict[str, str] = {
+        AiProvider.GEMINI.value: settings.gemini_model,
+        AiProvider.OPENAI.value: settings.openai_model,
+        AiProvider.AZURE_OPENAI.value: settings.azure_openai_deployment,
+    }
+    for p in settings.ai_providers:
+        if p != current_provider and p in provider_defaults:
+            alternatives.append({
+                "provider": p,
+                "model": provider_defaults[p],
+                "label": f"{provider_labels.get(p, p)} · {provider_defaults[p]}",
+            })
+    return alternatives[:6]
+
+    if provider_name == AiProvider.GEMINI.value:
+        from app.services.gemini_provider import GeminiProvider
+        return GeminiProvider(model=model)
+    elif provider_name == AiProvider.OPENAI.value:
+        from app.services.openai_provider import OpenAiProvider
+        return OpenAiProvider(model=model)
+    elif provider_name == AiProvider.AZURE_OPENAI.value:
+        from app.services.azure_openai_provider import AzureOpenAiProvider
+        return AzureOpenAiProvider(model=model)
     else:
         raise ValueError(f"Unbekannter AI-Provider: {provider_name}")
 
@@ -138,7 +245,14 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
         await _send(job_id, "completed", "analyze", f"{len(storyboard.scenes)} Szenen erkannt.", 100,
                     {"scenes": len(storyboard.scenes), "video_id": video_id})
     except Exception as exc:
-        await _send(job_id, "error", "analyze", str(exc))
+        if _is_throttle_error(exc):
+            pname = req.ai_provider.value if req.ai_provider else (settings.ai_providers[0] if settings.ai_providers else AiProvider.GEMINI.value)
+            mname = _get_effective_model(pname, req.ai_model)
+            await _send(job_id, "throttled", "analyze",
+                "Modell überlastet (503/429). Bitte wähle ein alternatives Modell.", 0,
+                {"alternatives": _throttle_alternatives(pname, mname)})
+        else:
+            await _send(job_id, "error", "analyze", str(exc))
 
 
 @router.post("/videos/{video_id}/analyze", response_model=JobStartResponse)
@@ -173,18 +287,64 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
     try:
         await _send(job_id, "progress", "rewrite", "Lade Frames...", 10)
         frames_dir = settings.frames_dir / video_id
-        frame_paths = sorted(
-            [frames_dir / fn for fn in req.image_group if (frames_dir / fn).exists()]
-        )
+        # Reihenfolge aus req.image_group beibehalten (entspricht der vom Nutzer
+        # im Editor festgelegten Anordnung per Drag & Drop) – kein sorted()!
+        frame_paths = [
+            frames_dir / fn for fn in req.image_group if (frames_dir / fn).exists()
+        ]
         if not frame_paths:
             raise FileNotFoundError(f"Keine Frames gefunden fuer Szene '{req.scene_id}'")
 
         await _send(job_id, "progress", "rewrite", f"Analysiere {len(frame_paths)} Frames...", 30)
 
-        prompt_extra = (
-            f"Hinweis: Diese Frames gehoeren alle zu EINER zusammenhaengenden Szene. "
-            f"Erstelle genau eine Szene mit scene_id '{req.scene_id}'."
+        # Nutzer-Texte in den Prompt einbauen wenn vorhanden
+        user_text_hint = ""
+        if req.current_texts:
+            lines = [
+                "Der Nutzer hat fuer diese Szene bereits folgende Texte verfasst. "
+                "Halte dich an den inhaltlichen Kern dieser Vorgaben und verbessere/ergaenze sie passend zu den Bildern:",
+            ]
+            for lang, tp in req.current_texts.items():
+                if tp.heading or tp.body or tp.speaker_notes:
+                    lines.append(f"  Sprache '{lang}':")
+                    if tp.heading:
+                        lines.append(f"    Ueberschrift: {tp.heading}")
+                    if tp.body:
+                        lines.append(f"    Beschreibung: {tp.body}")
+                    if tp.speaker_notes:
+                        lines.append(f"    Sprecher-Notizen: {tp.speaker_notes}")
+            user_text_hint = "\n".join(lines)
+
+        # Bildreihenfolge explizit aufführen (frame_paths = gefilterte Dateinamen in Nutzer-Reihenfolge)
+        frame_order_lines = [
+            f"  Position {i}: {p.name}"
+            for i, p in enumerate(frame_paths, 1)
+        ]
+        frame_order_hint = (
+            f"Die Bilder wurden vom Nutzer in folgender Reihenfolge angeordnet "
+            f"(Position 1 = erstes/frühestes Bild, Position {len(frame_paths)} = letztes Bild):\n"
+            + "\n".join(frame_order_lines)
         )
+
+        # Bild-spezifische KI-Anweisungen
+        image_prompt_hint = ""
+        if req.image_prompts:
+            lines = ["Fuer folgende Bilder hat der Nutzer spezifische KI-Anweisungen angegeben:"]
+            for fn, ip in req.image_prompts.items():
+                if ip and ip.strip():
+                    pos = next((i + 1 for i, p in enumerate(frame_paths) if p.name == fn), None)
+                    pos_str = f" (Position {pos})" if pos else ""
+                    lines.append(f"  Bild '{fn}'{pos_str}: {ip.strip()}")
+            if len(lines) > 1:
+                image_prompt_hint = "\n".join(lines)
+
+        prompt_extra = "\n\n".join(filter(None, [
+            f"Hinweis: Diese Frames gehoeren alle zu EINER zusammenhaengenden Szene. "
+            f"Erstelle genau eine Szene mit scene_id '{req.scene_id}'.",
+            frame_order_hint,
+            image_prompt_hint,
+            user_text_hint,
+        ]))
         analyze_req = AnalyzeRequest(
             video_id=video_id,
             languages=req.languages,
@@ -205,7 +365,14 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
             "scene_id": req.scene_id,
         })
     except Exception as exc:
-        await _send(job_id, "error", "rewrite", str(exc))
+        if _is_throttle_error(exc):
+            pname = req.ai_provider.value if req.ai_provider else (settings.ai_providers[0] if settings.ai_providers else AiProvider.GEMINI.value)
+            mname = _get_effective_model(pname, req.ai_model)
+            await _send(job_id, "throttled", "rewrite",
+                "Modell überlastet (503/429). Bitte wähle ein alternatives Modell.", 0,
+                {"alternatives": _throttle_alternatives(pname, mname)})
+        else:
+            await _send(job_id, "error", "rewrite", str(exc))
 
 
 @router.post("/videos/{video_id}/rewrite-scene", response_model=JobStartResponse)

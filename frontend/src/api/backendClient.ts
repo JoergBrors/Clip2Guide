@@ -48,6 +48,7 @@ export interface Scene {
   start_frame: string;
   end_frame: string | null;
   image_group: string[];
+  image_prompts: Record<string, string>;  // optional – wird vom Backend mit {} befuellt
   texts: Record<string, TextPanel>;
   duration_seconds: number;
 }
@@ -61,8 +62,14 @@ export interface StoryboardJson {
   metadata: Record<string, unknown>;
 }
 
+export interface ThrottleAlternative {
+  provider: string;
+  model: string;
+  label: string;
+}
+
 export interface JobEvent {
-  type: "progress" | "completed" | "error" | "log";
+  type: "progress" | "completed" | "error" | "log" | "throttled";
   step: string;
   message: string;
   percent: number;
@@ -182,6 +189,10 @@ export const api = {
     return `${BASE}/api/videos/${videoId}/frames/${filename}`;
   },
 
+  getAiProviders(): Promise<{ providers: { id: string; label: string }[]; default: string }> {
+    return request("/api/ai/providers");
+  },
+
   getAiModels(provider: string): Promise<{ provider: string; models: string[]; default: string }> {
     return request(`/api/ai/models?provider=${encodeURIComponent(provider)}`);
   },
@@ -217,6 +228,8 @@ export const api = {
     sceneId: string,
     imageGroup: string[],
     languages: string[],
+    currentTexts?: Record<string, { heading: string; body: string; speaker_notes: string }>,
+    imagePrompts?: Record<string, string>,
     provider?: string,
     model?: string,
   ): Promise<JobStartResponse> {
@@ -227,6 +240,8 @@ export const api = {
         scene_id: sceneId,
         image_group: imageGroup,
         languages,
+        current_texts: currentTexts,
+        image_prompts: imagePrompts,
         ai_provider: provider,
         ai_model: model,
       }),

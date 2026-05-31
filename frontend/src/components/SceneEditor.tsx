@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api, StoryboardJson, Scene, TextPanel, subscribeToJob, JobEvent } from "../api/backendClient";
+import { api, StoryboardJson, Scene, TextPanel, subscribeToJob, JobEvent, ThrottleAlternative } from "../api/backendClient";
 import JsonPreview from "./JsonPreview";
 
 interface Props {
@@ -25,24 +25,64 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
   // Hover-Zoom-Vorschau
   const [hoveredImg, setHoveredImg] = useState<{ src: string; x: number; y: number } | null>(null);
 
-  // Drag-and-Drop: Bild zwischen Szenen verschieben
-  const [dragInfo, setDragInfo] = useState<{ filename: string; fromScene: number } | null>(null);
+  // Drag-and-Drop: Bild zwischen Szenen verschieben (fromScene = null → aus Referenz-Streifen)
+  const [dragInfo, setDragInfo] = useState<{ filename: string; fromScene: number | null } | null>(null);
   const [dragOverScene, setDragOverScene] = useState<number | null>(null);
+  // In-Szene-Reihenfolge: Dateiname vor dem der gezogene Frame eingesetzt wird
+  const [dragOverInsideFilename, setDragOverInsideFilename] = useState<string | null>(null);
+
+  // Alle Frames des Videos als Fallback-Referenz, wenn selectedFrames leer ist
+  const [allFrames, setAllFrames] = useState<string[]>([]);
+  useEffect(() => {
+    if (!selectedFrames || selectedFrames.length === 0) {
+      api.getFrameStack(videoId)
+        .then((stack) => {
+          if (stack) setAllFrames(stack.frames.map((f) => f.filename));
+        })
+        .catch(() => { /* keine Frames verfügbar */ });
+    }
+  }, [videoId, selectedFrames]);
+
+  // Referenz-Frames: explizit ausgewählte oder alle verfügbaren
+  const refFrames = (selectedFrames && selectedFrames.length > 0) ? selectedFrames : allFrames;
+  const [dragOverImageGroup, setDragOverImageGroup] = useState(false);
 
   // KI Szene neu schreiben
   const [rewritingScene, setRewritingScene] = useState(false);
   const [rewriteMsg, setRewriteMsg] = useState("");
   const [rewriteProgress, setRewriteProgress] = useState(0);
 
+  // Throttle-Dialog: wird gesetzt wenn ein KI-Anbieter 503/429 zurueckgibt
+  const [throttleDialog, setThrottleDialog] = useState<{
+    context: "analyze" | "rewrite";
+    alternatives: ThrottleAlternative[];
+  } | null>(null);
+
   // Provider / Modell-Auswahl
-  const [provider, setProvider] = useState<"gemini" | "openai">("gemini");
+  const [availableProviders, setAvailableProviders] = useState<{ id: string; label: string }[]>([]);
+  const [provider, setProvider] = useState<string>("");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
 
+  // Provider-Liste einmalig beim Laden holen
+  useEffect(() => {
+    api.getAiProviders()
+      .then(({ providers, default: def }) => {
+        setAvailableProviders(providers);
+        setProvider(def);
+      })
+      .catch(() => {
+        // Fallback wenn Endpoint nicht erreichbar
+        setAvailableProviders([{ id: "gemini", label: "Google Gemini" }]);
+        setProvider("gemini");
+      });
+  }, []);
+
   // Modelle laden wenn Provider gewechselt wird
   useEffect(() => {
+    if (!provider) return;
     setModelsLoading(true);
     setModelsError(null);
     setAvailableModels([]);
@@ -62,17 +102,24 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
       .catch(() => { /* noch nicht erstellt */ });
   }, [videoId]);
 
-  async function runAnalyze() {
+  async function runAnalyze(providerOverride?: string, modelOverride?: string) {
     setAnalyzing(true);
     setError(null);
+    setThrottleDialog(null);
+    const activeProvider = providerOverride ?? provider;
+    const activeModel = (modelOverride ?? selectedModel) || undefined;
     try {
-      const { job_id } = await api.analyzeVideo(videoId, languages, provider, selectedModel || undefined, selectedFrames?.length ? selectedFrames : undefined);
+      const { job_id } = await api.analyzeVideo(videoId, languages, activeProvider, activeModel, selectedFrames?.length ? selectedFrames : undefined);
       subscribeToJob(job_id, (ev: JobEvent) => {
         setAnalyzeMsg(ev.message);
         setAnalyzeProgress(ev.percent);
         if (ev.type === "completed") {
           setAnalyzing(false);
           api.getStoryboard(videoId).then(setStoryboard).catch(console.error);
+        } else if (ev.type === "throttled") {
+          setAnalyzing(false);
+          const alts = (ev.data?.alternatives ?? []) as ThrottleAlternative[];
+          setThrottleDialog({ context: "analyze", alternatives: alts });
         } else if (ev.type === "error") {
           setAnalyzing(false);
           setError(ev.message);
@@ -82,6 +129,15 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
       setAnalyzing(false);
       setError(e instanceof Error ? e.message : "Analyse fehlgeschlagen");
     }
+  }
+
+  function setImagePrompt(sceneIdx: number, filename: string, prompt: string) {
+    if (!storyboard) return;
+    const updated = { ...storyboard, scenes: [...storyboard.scenes] };
+    const s = { ...updated.scenes[sceneIdx] };
+    s.image_prompts = { ...s.image_prompts, [filename]: prompt };
+    updated.scenes[sceneIdx] = s;
+    setStoryboard(updated);
   }
 
   function updateTextPanel(sceneIdx: number, lang: string, field: keyof TextPanel, value: string) {
@@ -112,9 +168,70 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     from.image_group = from.image_group.filter((f) => f !== filename);
     updated.scenes[fromIdx] = from;
     const to = { ...updated.scenes[toIdx] };
-    to.image_group = [...to.image_group, filename].sort();
+    to.image_group = [...to.image_group, filename];
     updated.scenes[toIdx] = to;
     setStoryboard(updated);
+  }
+
+  function addFrameFromRef(filename: string, toIdx: number) {
+    if (!storyboard) return;
+    const updated = { ...storyboard, scenes: storyboard.scenes.map((s, i) => {
+      if (i === toIdx) return s;
+      if (s.image_group.includes(filename)) {
+        const ng = s.image_group.filter((f) => f !== filename);
+        return { ...s, image_group: ng,
+          start_frame: ng[0] ?? s.start_frame,
+          end_frame: ng[ng.length - 1] ?? null,
+        };
+      }
+      return s;
+    }) };
+    const to = { ...updated.scenes[toIdx] };
+    if (!to.image_group.includes(filename)) {
+      to.image_group = [...to.image_group, filename];
+      if (!to.start_frame) to.start_frame = to.image_group[0];
+    }
+    updated.scenes[toIdx] = to;
+    setStoryboard(updated);
+  }
+
+  function reorderWithinScene(sceneIdx: number, fromFilename: string, beforeFilename: string | null) {
+    if (!storyboard) return;
+    const updated = { ...storyboard, scenes: [...storyboard.scenes] };
+    const s = { ...updated.scenes[sceneIdx] };
+    const group = s.image_group.filter((f) => f !== fromFilename);
+    const insertAt = beforeFilename ? group.indexOf(beforeFilename) : group.length;
+    group.splice(insertAt === -1 ? group.length : insertAt, 0, fromFilename);
+    s.image_group = group;
+    s.start_frame = group[0] ?? "";
+    s.end_frame = group[group.length - 1] ?? null;
+    updated.scenes[sceneIdx] = s;
+    setStoryboard(updated);
+  }
+
+  function addScene() {
+    if (!storyboard) return;
+    const langs = storyboard.languages.length ? storyboard.languages : languages;
+    const emptyTexts = Object.fromEntries(langs.map((l) => [l, { heading: "", body: "", speaker_notes: "" }]));
+    const newScene: Scene = {
+      scene_id: crypto.randomUUID(),
+      start_frame: "",
+      end_frame: null,
+      image_group: [],
+      image_prompts: {},
+      texts: emptyTexts,
+      duration_seconds: 0,
+    };
+    const updated = { ...storyboard, scenes: [...storyboard.scenes, newScene] };
+    setStoryboard(updated);
+    setActiveScene(updated.scenes.length - 1);
+  }
+
+  function deleteScene(idx: number) {
+    if (!storyboard || storyboard.scenes.length <= 1) return;
+    const updated = { ...storyboard, scenes: storyboard.scenes.filter((_, i) => i !== idx) };
+    setStoryboard(updated);
+    setActiveScene(Math.min(idx, updated.scenes.length - 1));
   }
 
   function handleImgHover(src: string, e: React.MouseEvent) {
@@ -136,22 +253,87 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
   function handleSceneDrop(e: React.DragEvent, toIdx: number) {
     e.preventDefault();
     setDragOverScene(null);
-    if (!dragInfo || dragInfo.fromScene === toIdx) { setDragInfo(null); return; }
-    moveFrameToScene(dragInfo.fromScene, toIdx, dragInfo.filename);
+    if (!dragInfo) return;
+    if (dragInfo.fromScene === null) {
+      addFrameFromRef(dragInfo.filename, toIdx);
+    } else if (dragInfo.fromScene !== toIdx) {
+      moveFrameToScene(dragInfo.fromScene, toIdx, dragInfo.filename);
+    }
     setDragInfo(null);
   }
 
-  async function runRewriteScene() {
+  function handleImageGroupDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOverImageGroup(false);
+    setDragOverInsideFilename(null);
+    if (!dragInfo) return;
+    if (dragInfo.fromScene === activeScene) {
+      // In-Szene: ans Ende verschieben
+      reorderWithinScene(activeScene, dragInfo.filename, null);
+    } else if (dragInfo.fromScene === null) {
+      addFrameFromRef(dragInfo.filename, activeScene);
+    } else {
+      moveFrameToScene(dragInfo.fromScene, activeScene, dragInfo.filename);
+    }
+    setDragInfo(null);
+  }
+
+  function handleInsideItemDragOver(e: React.DragEvent, filename: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragInfo) return;
+    if (dragInfo.fromScene === activeScene) {
+      // Reihenfolge innerhalb der Szene
+      setDragOverInsideFilename(filename);
+    } else {
+      // Externe Quelle: ganzen Container highlighten
+      setDragOverImageGroup(true);
+    }
+  }
+
+  function handleInsideItemDrop(e: React.DragEvent, beforeFilename: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverInsideFilename(null);
+    setDragOverImageGroup(false);
+    if (!dragInfo) return;
+    if (dragInfo.fromScene === activeScene) {
+      reorderWithinScene(activeScene, dragInfo.filename, beforeFilename);
+    } else if (dragInfo.fromScene === null) {
+      addFrameFromRef(dragInfo.filename, activeScene);
+    } else {
+      moveFrameToScene(dragInfo.fromScene, activeScene, dragInfo.filename);
+    }
+    setDragInfo(null);
+  }
+
+  async function runRewriteScene(providerOverride?: string, modelOverride?: string) {
     if (!storyboard || !scene) return;
     setRewritingScene(true);
     setRewriteMsg("");
     setRewriteProgress(0);
     setError(null);
+    setThrottleDialog(null);
+    const activeProvider = providerOverride ?? provider;
+    const activeModel = (modelOverride ?? selectedModel) || undefined;
     try {
       const langs = storyboard.languages.length ? storyboard.languages : languages;
+      // Aktuelle Nutzer-Texte mitschicken damit die KI sie berücksichtigt
+      const currentTexts = scene.texts
+        ? Object.fromEntries(
+            Object.entries(scene.texts).map(([lang, tp]) => [
+              lang,
+              { heading: tp.heading, body: tp.body, speaker_notes: tp.speaker_notes },
+            ])
+          )
+        : undefined;
+      const imagePrompts = scene.image_prompts
+        ? Object.fromEntries(Object.entries(scene.image_prompts).filter(([, v]) => v && v.trim()))
+        : undefined;
       const { job_id } = await api.rewriteScene(
         videoId, scene.scene_id, scene.image_group, langs,
-        provider, selectedModel || undefined
+        currentTexts, Object.keys(imagePrompts ?? {}).length ? imagePrompts : undefined,
+        activeProvider, activeModel
       );
       subscribeToJob(job_id, (ev: JobEvent) => {
         setRewriteMsg(ev.message);
@@ -163,6 +345,10 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
           const s = { ...updated.scenes[activeScene], texts: { ...updated.scenes[activeScene].texts, ...texts } };
           updated.scenes[activeScene] = s;
           setStoryboard(updated);
+        } else if (ev.type === "throttled") {
+          setRewritingScene(false);
+          const alts = (ev.data?.alternatives ?? []) as ThrottleAlternative[];
+          setThrottleDialog({ context: "rewrite", alternatives: alts });
         } else if (ev.type === "error") {
           setRewritingScene(false);
           setError(ev.message);
@@ -223,14 +409,14 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
             {/* Provider-Auswahl */}
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
               <span style={{ fontSize: 13, color: "#90caf9", minWidth: 80 }}>Provider:</span>
-              {(["gemini", "openai"] as const).map((p) => (
+              {availableProviders.map((p) => (
                 <button
-                  key={p}
-                  className={`btn ${provider === p ? "btn-primary" : "btn-ghost"}`}
+                  key={p.id}
+                  className={`btn ${provider === p.id ? "btn-primary" : "btn-ghost"}`}
                   style={{ fontSize: 13, padding: "4px 16px", textTransform: "capitalize" }}
-                  onClick={() => setProvider(p)}
+                  onClick={() => setProvider(p.id)}
                 >
-                  {p === "gemini" ? "🤖 Google Gemini" : "🧠 OpenAI"}
+                  {p.label}
                 </button>
               ))}
             </div>
@@ -272,7 +458,7 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
 
             <button
               className="btn btn-primary"
-              onClick={runAnalyze}
+              onClick={() => runAnalyze()}
               disabled={modelsLoading || !selectedModel}
             >
               KI-Analyse starten
@@ -290,6 +476,43 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
         )}
 
         {error && <p role="alert" style={{ color: "#ef5350" }}>Fehler: {error}</p>}
+
+        {throttleDialog && (
+          <div role="alert" style={{
+            background: "#1a2a1a", border: "1px solid #f57f17", borderRadius: 8,
+            padding: "14px 16px", marginTop: 8,
+          }}>
+            <p style={{ color: "#ffb74d", fontWeight: 600, margin: "0 0 10px" }}>
+              ⚠️ Modell überlastet – bitte wähle ein alternatives Modell:
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {throttleDialog.alternatives.map((alt) => (
+                <button
+                  key={`${alt.provider}-${alt.model}`}
+                  className="btn btn-ghost"
+                  style={{ fontSize: 12, borderColor: "#f57f17", color: "#ffb74d" }}
+                  onClick={() => {
+                    setThrottleDialog(null);
+                    if (throttleDialog.context === "analyze") {
+                      runAnalyze(alt.provider, alt.model);
+                    } else {
+                      runRewriteScene(alt.provider, alt.model);
+                    }
+                  }}
+                >
+                  {alt.label}
+                </button>
+              ))}
+              <button
+                className="btn btn-ghost"
+                style={{ fontSize: 12, color: "#888" }}
+                onClick={() => setThrottleDialog(null)}
+              >
+                Abbrechen
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {storyboard && !showJson && (
@@ -299,16 +522,11 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
             {storyboard.scenes.map((s, i) => (
               <div
                 key={s.scene_id}
-                role="button"
-                tabIndex={0}
-                onClick={() => setActiveScene(i)}
-                onKeyDown={(e) => e.key === "Enter" && setActiveScene(i)}
                 onDragOver={(e) => { e.preventDefault(); setDragOverScene(i); }}
                 onDragLeave={() => setDragOverScene(null)}
                 onDrop={(e) => handleSceneDrop(e, i)}
                 className="card"
                 style={{
-                  cursor: "pointer",
                   padding: "10px 12px",
                   marginBottom: 8,
                   border: dragOverScene === i
@@ -319,19 +537,51 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
                   background: dragOverScene === i ? "rgba(79,195,247,0.08)" : undefined,
                   transition: "border 0.15s, background 0.15s",
                   fontSize: 13,
+                  position: "relative",
                 }}
               >
-                {s.image_group[0] && (
-                  <img
-                    src={api.frameImageUrl(videoId, s.image_group[0])}
-                    alt={`Szene ${i + 1}`}
-                    style={{ width: "100%", aspectRatio: "16/9", objectFit: "cover", borderRadius: 3, marginBottom: 5, display: "block" }}
-                  />
+                {/* Klick-Bereich */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setActiveScene(i)}
+                  onKeyDown={(e) => e.key === "Enter" && setActiveScene(i)}
+                  style={{ cursor: "pointer" }}
+                >
+                  {s.image_group[0] && (
+                    <img
+                      src={api.frameImageUrl(videoId, s.image_group[0])}
+                      alt={`Szene ${i + 1}`}
+                      style={{ width: "100%", aspectRatio: "16/9", objectFit: "cover", borderRadius: 3, marginBottom: 5, display: "block" }}
+                    />
+                  )}
+                  <div style={{ color: "#90caf9", fontWeight: 600 }}>Szene {i + 1}</div>
+                  <div style={{ color: "#666", fontSize: 11, marginTop: 2 }}>{s.duration_seconds.toFixed(1)}s · {s.image_group.length} Bilder</div>
+                </div>
+                {/* Löschen-Button */}
+                {storyboard.scenes.length > 1 && (
+                  <button
+                    title="Szene löschen"
+                    onClick={(e) => { e.stopPropagation(); deleteScene(i); }}
+                    style={{
+                      position: "absolute", top: 6, right: 6,
+                      background: "rgba(180,40,40,0.85)", border: "none", borderRadius: "50%",
+                      width: 18, height: 18, cursor: "pointer", color: "#fff",
+                      fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center",
+                      lineHeight: 1, padding: 0,
+                    }}
+                  >✕</button>
                 )}
-                <div style={{ color: "#90caf9", fontWeight: 600 }}>Szene {i + 1}</div>
-                <div style={{ color: "#666", fontSize: 11, marginTop: 2 }}>{s.duration_seconds.toFixed(1)}s · {s.image_group.length} Bilder</div>
               </div>
             ))}
+            {/* Szene hinzufügen */}
+            <button
+              className="btn btn-ghost"
+              style={{ width: "100%", fontSize: 12, padding: "6px 0", borderStyle: "dashed", color: "#4fc3f7", borderColor: "#4fc3f7" }}
+              onClick={addScene}
+            >
+              + Szene hinzufügen
+            </button>
           </div>
 
           {/* Editor */}
@@ -357,7 +607,7 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
                     <button
                       className="btn btn-ghost"
                       style={{ fontSize: 12, padding: "4px 12px", borderColor: "#4fc3f7", color: "#4fc3f7" }}
-                      onClick={runRewriteScene}
+                      onClick={() => runRewriteScene()}
                       disabled={rewritingScene || scene.image_group.length === 0}
                       title={`KI schreibt Szene neu (${provider} / ${selectedModel || "Standard"})`}
                     >
@@ -367,40 +617,103 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
                 </div>
 
                 {/* Bilder-Gruppe */}
-                <div style={{ marginBottom: 14, padding: "10px 12px", background: "#0a0f1a", borderRadius: 6, border: "1px solid #1a2a3a" }}>
+                <div
+                  style={{ marginBottom: 14, padding: "10px 12px", background: "#0a0f1a", borderRadius: 6,
+                    border: dragOverImageGroup ? "2px solid #4fc3f7" : "1px solid #1a2a3a",
+                    transition: "border 0.15s",
+                  }}
+                  onDragOver={(e) => { if (dragInfo && dragInfo.fromScene !== activeScene) { e.preventDefault(); setDragOverImageGroup(true); } }}
+                  onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverImageGroup(false); }}
+                  onDrop={handleImageGroupDrop}
+                >
                   <div style={{ fontSize: 11, fontWeight: 700, color: "#6080a0", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
-                    Bilder dieser Szene ({scene.image_group.length}) · ✕ = entfernen · ziehen = verschieben
+                    Bilder dieser Szene ({scene.image_group.length}) · ziehen = reihenfolge ändern / in andere szene · ✕ = entfernen
                   </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, minHeight: 34 }}>
+                  <div
+                    style={{ display: "flex", flexWrap: "wrap", gap: 5, minHeight: 34 }}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                        setDragOverInsideFilename(null);
+                      }
+                    }}
+                  >
                     {scene.image_group.length === 0 && (
                       <span style={{ fontSize: 12, color: "#555", fontStyle: "italic" }}>Keine Bilder zugeordnet</span>
                     )}
                     {scene.image_group.map((filename) => {
                       const src = api.frameImageUrl(videoId, filename);
+                      const isDropTarget = dragOverInsideFilename === filename && dragInfo?.fromScene === activeScene;
                       return (
                         <div
                           key={filename}
                           draggable
-                          style={{ position: "relative", cursor: "grab", flexShrink: 0 }}
-                          title={`${filename} – ziehen zum Verschieben, klicken zum Entfernen`}
+                          style={{
+                            flexShrink: 0, cursor: "grab", width: 88,
+                            borderLeft: isDropTarget ? "3px solid #4fc3f7" : "3px solid transparent",
+                            borderRadius: 4,
+                            transition: "border-color 0.1s",
+                            opacity: dragInfo?.filename === filename && dragInfo.fromScene === activeScene ? 0.4 : 1,
+                          }}
+                          title={`${filename} – ziehen = Reihenfolge ändern / in andere Szene verschieben`}
                           onDragStart={(e) => handleDragStart(e, filename, activeScene)}
-                          onDragEnd={() => setDragInfo(null)}
-                          onClick={() => removeFrameFromScene(activeScene, filename)}
-                          onMouseEnter={(e) => handleImgHover(src, e)}
-                          onMouseMove={(e) => handleImgHover(src, e)}
-                          onMouseLeave={() => setHoveredImg(null)}
+                          onDragEnd={() => { setDragInfo(null); setDragOverInsideFilename(null); }}
+                          onDragOver={(e) => handleInsideItemDragOver(e, filename)}
+                          onDrop={(e) => handleInsideItemDrop(e, filename)}
                         >
-                          <img
-                            src={src}
-                            alt={filename}
-                            style={{ width: 88, height: 50, objectFit: "cover", borderRadius: 4, border: "1px solid #2a4a6a", display: "block", pointerEvents: "none" }}
+                          {/* Bild + Badges */}
+                          <div
+                            style={{ position: "relative" }}
+                            onMouseEnter={(e) => handleImgHover(src, e)}
+                            onMouseMove={(e) => handleImgHover(src, e)}
+                            onMouseLeave={() => setHoveredImg(null)}
+                          >
+                            <img
+                              src={src}
+                              alt={filename}
+                              style={{ width: 88, height: 50, objectFit: "cover", borderRadius: 4, border: "1px solid #2a4a6a", display: "block", pointerEvents: "none" }}
+                            />
+                            {/* Reihenfolge-Nummer */}
+                            <div style={{
+                              position: "absolute", bottom: 2, left: 2,
+                              background: "rgba(10,20,50,0.85)", borderRadius: 3,
+                              padding: "1px 4px", fontSize: 9, color: "#90caf9",
+                              fontWeight: 700, pointerEvents: "none",
+                            }}>{scene.image_group.indexOf(filename) + 1}</div>
+                            {/* Entfernen-Button */}
+                            <button
+                              title="Bild entfernen"
+                              onClick={(e) => { e.stopPropagation(); removeFrameFromScene(activeScene, filename); }}
+                              style={{
+                                position: "absolute", top: 2, right: 2,
+                                background: "rgba(180,40,40,0.9)", border: "none", borderRadius: "50%",
+                                width: 14, height: 14, cursor: "pointer", color: "#fff",
+                                fontSize: 9, display: "flex", alignItems: "center", justifyContent: "center",
+                                lineHeight: 1, padding: 0,
+                              }}
+                            >✕</button>
+                          </div>
+                          {/* Per-Bild KI-Anweisung */}
+                          <textarea
+                            draggable={false}
+                            placeholder="KI-Anweisung…"
+                            value={scene.image_prompts?.[filename] ?? ""}
+                            rows={2}
+                            onClick={(e) => e.stopPropagation()}
+                            onDragStart={(e) => e.preventDefault()}
+                            onMouseEnter={() => setHoveredImg(null)}
+                            onChange={(e) => { e.stopPropagation(); setImagePrompt(activeScene, filename, e.target.value); }}
+                            style={{
+                              width: "100%", boxSizing: "border-box",
+                              marginTop: 3, padding: "2px 4px",
+                              fontSize: 9, lineHeight: 1.35,
+                              background: "#0d1a2a", color: "#90caf9",
+                              border: scene.image_prompts?.[filename]?.trim()
+                                ? "1px solid #4fc3f7"
+                                : "1px solid #1a3050",
+                              borderRadius: 3, resize: "none",
+                              fontFamily: "inherit", cursor: "text",
+                            }}
                           />
-                          <div style={{
-                            position: "absolute", top: 2, right: 2,
-                            background: "rgba(180,40,40,0.9)", borderRadius: "50%",
-                            width: 14, height: 14, display: "flex", alignItems: "center",
-                            justifyContent: "center", fontSize: 9, color: "#fff", pointerEvents: "none",
-                          }}>✕</div>
                         </div>
                       );
                     })}
@@ -511,21 +824,30 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
       )}
 
       {/* Übergebene Frames – Referenzstreifen */}
-      {selectedFrames && selectedFrames.length > 0 && (
+      {refFrames.length > 0 && (
         <div className="card" style={{ marginTop: 12 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#6080a0", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
-            Übergebene Frames ({selectedFrames.length}) – Referenz
+            {selectedFrames && selectedFrames.length > 0
+              ? `Übergebene Frames (${refFrames.length}) – Auswahl · ziehen = in Szene einfügen`
+              : `Alle Frames (${refFrames.length}) – ziehen = in Szene einfügen`}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5, overflowX: "auto" }}>
-            {selectedFrames.map((filename, idx) => {
+            {refFrames.map((filename, idx) => {
               const src = api.frameImageUrl(videoId, filename);
               // Welcher Szene ist dieser Frame zugeordnet?
               const assignedScene = storyboard?.scenes.findIndex((s) => s.image_group.includes(filename)) ?? -1;
+              const isDragging = dragInfo?.filename === filename && dragInfo.fromScene === null;
               return (
                 <div
                   key={filename}
-                  title={`${filename}${assignedScene >= 0 ? ` → Szene ${assignedScene + 1}` : " (nicht zugeordnet)"}`}
-                  style={{ position: "relative", flexShrink: 0 }}
+                  draggable
+                  title={`${filename}${assignedScene >= 0 ? ` → Szene ${assignedScene + 1}` : " (nicht zugeordnet)"} – ziehen zum Hinzufügen`}
+                  style={{ position: "relative", flexShrink: 0, cursor: "grab", opacity: isDragging ? 0.4 : 1 }}
+                  onDragStart={(e) => { setDragInfo({ filename, fromScene: null }); e.dataTransfer.effectAllowed = "copy"; }}
+                  onDragEnd={() => setDragInfo(null)}
+                  onMouseEnter={(e) => handleImgHover(src, e)}
+                  onMouseMove={(e) => handleImgHover(src, e)}
+                  onMouseLeave={() => setHoveredImg(null)}
                 >
                   <img
                     src={src}
@@ -538,10 +860,8 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
                       border: `1px solid ${assignedScene >= 0 ? "#2a4a6a" : "#6a2a2a"}`,
                       display: "block",
                       opacity: assignedScene >= 0 ? 1 : 0.5,
+                      pointerEvents: "none",
                     }}
-                    onMouseEnter={(e) => handleImgHover(src, e)}
-                    onMouseMove={(e) => handleImgHover(src, e)}
-                    onMouseLeave={() => setHoveredImg(null)}
                   />
                   {/* Szenen-Badge */}
                   <div style={{
@@ -554,6 +874,7 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
                     padding: "1px 4px",
                     borderRadius: 3,
                     fontWeight: 700,
+                    pointerEvents: "none",
                   }}>
                     {assignedScene >= 0 ? `S${assignedScene + 1}` : "?"}
                   </div>
@@ -562,7 +883,7 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
             })}
           </div>
           {storyboard && (() => {
-            const unassigned = selectedFrames.filter(
+            const unassigned = refFrames.filter(
               (fn) => !storyboard.scenes.some((s) => s.image_group.includes(fn))
             );
             return unassigned.length > 0 ? (

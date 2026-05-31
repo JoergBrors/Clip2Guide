@@ -1,5 +1,7 @@
 """
-OpenAI-Provider: Multimodale Frame-Analyse via OpenAI Vision API.
+Azure-OpenAI-Provider: Multimodale Frame-Analyse via Azure OpenAI Service.
+Verwendet denselben openai-Client wie der Standard-OpenAI-Provider,
+aber mit AzureOpenAI-Konfiguration (Endpoint + API-Key + Deployment-Name).
 """
 from __future__ import annotations
 
@@ -7,7 +9,7 @@ import base64
 from pathlib import Path
 from typing import List
 
-from openai import OpenAI
+from openai import AzureOpenAI
 
 from app.config import settings
 from app.models import StoryboardJson
@@ -15,13 +17,21 @@ from app.services.ai_provider_base import AiProviderBase
 from app.services.storyboard_service import build_analysis_prompt, parse_storyboard_response
 
 
-class OpenAiProvider(AiProviderBase):
+class AzureOpenAiProvider(AiProviderBase):
 
     def __init__(self, model: str | None = None) -> None:
-        if not settings.openai_api_key:
-            raise ValueError("OPENAI_API_KEY ist nicht gesetzt.")
-        self._client = OpenAI(api_key=settings.openai_api_key)
-        self._model_name = model or settings.openai_model
+        if not settings.azure_openai_api_key:
+            raise ValueError("AZURE_OPENAI_API_KEY ist nicht gesetzt.")
+        if not settings.azure_openai_endpoint:
+            raise ValueError("AZURE_OPENAI_ENDPOINT ist nicht gesetzt.")
+
+        self._client = AzureOpenAI(
+            api_key=settings.azure_openai_api_key,
+            azure_endpoint=settings.azure_openai_endpoint,
+            api_version=settings.azure_openai_api_version,
+        )
+        # Bei Azure ist das "model" der Deployment-Name
+        self._deployment = model or settings.azure_openai_deployment
 
     def _encode_image(self, path: Path) -> str:
         return base64.b64encode(path.read_bytes()).decode("utf-8")
@@ -33,7 +43,7 @@ class OpenAiProvider(AiProviderBase):
         video_id: str,
         prompt_extra: str = "",
     ) -> StoryboardJson:
-        # Bilder vorbereiten (max. 10 Frames – OpenAI ist kostenintensiver)
+        # Bilder vorbereiten (max. 10 Frames)
         sample_paths = frame_paths[:: max(1, len(frame_paths) // 10)][:10]
         total = len(sample_paths)
 
@@ -49,7 +59,7 @@ class OpenAiProvider(AiProviderBase):
             })
 
         response = self._client.chat.completions.create(
-            model=self._model_name,
+            model=self._deployment,
             messages=[{"role": "user", "content": content}],
             response_format={"type": "json_object"},
             max_tokens=4096,

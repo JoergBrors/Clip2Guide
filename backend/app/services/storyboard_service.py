@@ -13,10 +13,19 @@ from app.models import Scene, StoryboardJson, TextPanel
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
 
-def build_analysis_prompt(languages: List[str], video_id: str, extra: str = "") -> str:
+def build_analysis_prompt(languages: List[str], video_id: str, extra: str = "", num_frames: int = 0) -> str:
     lang_list = ", ".join(languages)
+    frame_hint = (
+        f"Es folgen {num_frames} Bilder in strikt chronologischer Reihenfolge "
+        f"(Bild 1 = frühester Zeitpunkt, Bild {num_frames} = spätester Zeitpunkt). "
+        "Jedes Bild ist mit [Bild X von N] beschriftet. "
+        "Nutze diese Reihenfolge, um den zeitlichen Ablauf des Videos zu verstehen und "
+        "die Szenen korrekt zuzuordnen."
+    ) if num_frames > 0 else ""
     return f"""Du bist ein Experte fuer das Erstellen von Video-Tutorials.
 Analysiere die folgenden Screenshots einer Bildschirmaufnahme und erstelle ein strukturiertes Storyboard.
+
+{frame_hint}
 
 Aufgabe:
 - Teile die Aufnahme in logische Szenen ein (jede Szene = ein zusammenhaengender Arbeitsschritt).
