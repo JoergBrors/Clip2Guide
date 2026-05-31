@@ -2,7 +2,7 @@ import { IpcMain, dialog, shell, app } from "electron";
 import { spawn } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
-import { USER_ENV_FILE } from "./main";
+import { USER_ENV_FILE, USER_LOCAL_DIR } from "./main";
 
 /** Registriert alle IPC-Handler im Haupt-Prozess. */
 export function registerAll(ipcMain: IpcMain): void {
@@ -67,14 +67,17 @@ export function registerAll(ipcMain: IpcMain): void {
       if (isWindows) {
         proc = spawn(
           "powershell.exe",
-          ["-ExecutionPolicy", "RemoteSigned", "-File", scriptPath, "-Root", resourcesPath],
+          ["-ExecutionPolicy", "RemoteSigned", "-File", scriptPath,
+           "-Root", USER_LOCAL_DIR,
+           "-AppSourceDir", resourcesPath],
           { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env } }
         );
       } else {
         proc = spawn(
           "bash",
           [scriptPath],
-          { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ROOT: resourcesPath } }
+          { stdio: ["ignore", "pipe", "pipe"],
+            env: { ...process.env, ROOT: USER_LOCAL_DIR, APP_SOURCE_DIR: resourcesPath } }
         );
       }
 

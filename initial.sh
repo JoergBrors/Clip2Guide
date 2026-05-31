@@ -7,6 +7,7 @@ set -euo pipefail
 # ── Standardwerte ─────────────────────────────────────────────────────────────
 PYTHON_VERSION="${PYTHON_VERSION:-3.13}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_SOURCE_DIR="${APP_SOURCE_DIR:-}"
 SKIP_PYTHON=false
 SKIP_FFMPEG=false
 SKIP_AUTO_EDITOR=false
@@ -18,6 +19,7 @@ FORCE_AUTO_EDITOR=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root)             ROOT="$(realpath "$2")"; shift 2 ;;
+    --app-source-dir)   APP_SOURCE_DIR="$(realpath "$2")"; shift 2 ;;
     --python-version)   PYTHON_VERSION="$2"; shift 2 ;;
     --skip-python)      SKIP_PYTHON=true; shift ;;
     --skip-ffmpeg)      SKIP_FFMPEG=true; shift ;;
@@ -111,9 +113,14 @@ if [[ "$SKIP_PYTHON" == "false" ]]; then
 
   python -m pip install --upgrade pip setuptools wheel
 
-  REQUIREMENTS_PATH="$BACKEND_DIR/requirements.txt"
-  if [[ ! -f "$REQUIREMENTS_PATH" ]]; then
-    echo "requirements.txt nicht gefunden: $REQUIREMENTS_PATH"
+  # requirements.txt: erst in APP_SOURCE_DIR (paketierd), dann in BACKEND_DIR
+  REQUIREMENTS_PATH=""
+  if [[ -n "$APP_SOURCE_DIR" && -f "$APP_SOURCE_DIR/backend/requirements.txt" ]]; then
+    REQUIREMENTS_PATH="$APP_SOURCE_DIR/backend/requirements.txt"
+  elif [[ -f "$BACKEND_DIR/requirements.txt" ]]; then
+    REQUIREMENTS_PATH="$BACKEND_DIR/requirements.txt"
+  else
+    echo "requirements.txt nicht gefunden (weder in APP_SOURCE_DIR noch in $BACKEND_DIR)"
     exit 1
   fi
 
@@ -205,11 +212,17 @@ fi
 # ── .env Konfiguration ─────────────────────────────────────────────────────────
 section ".env Konfiguration"
 
-ENV_EXAMPLE="$ROOT/.env.example"
+# env.example: erst in APP_SOURCE_DIR (resources/env.example), dann im ROOT
+ENV_EXAMPLE=""
+if [[ -n "$APP_SOURCE_DIR" && -f "$APP_SOURCE_DIR/env.example" ]]; then
+  ENV_EXAMPLE="$APP_SOURCE_DIR/env.example"
+elif [[ -f "$ROOT/.env.example" ]]; then
+  ENV_EXAMPLE="$ROOT/.env.example"
+fi
 ENV_FILE="$ROOT/.env"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  if [[ -f "$ENV_EXAMPLE" ]]; then
+  if [[ -n "$ENV_EXAMPLE" && -f "$ENV_EXAMPLE" ]]; then
     cp "$ENV_EXAMPLE" "$ENV_FILE"
     # Pfade fuer macOS anpassen (kein .exe)
     sed -i '' \

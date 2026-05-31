@@ -14,6 +14,21 @@ export const USER_ENV_FILE = isDev
   ? path.join(path.resolve(__dirname, "../../.."), ".env")
   : path.join(app.getPath("userData"), ".env");
 
+/**
+ * Beschreibbares lokales Benutzerverzeichnis für venv, Tools und Workspace.
+ * Windows : %LOCALAPPDATA%\Clip2Guide  (nicht-roamend, ideal für große Videodaten)
+ * macOS   : ~/Library/Application Support/Clip2Guide
+ * Dev     : Projektverzeichnis
+ */
+export const USER_LOCAL_DIR: string = (() => {
+  if (isDev) return path.resolve(__dirname, "../../..");
+  if (process.platform === "win32") {
+    const local = process.env.LOCALAPPDATA;
+    if (local) return path.join(local, "Clip2Guide");
+  }
+  return app.getPath("userData");
+})();
+
 let mainWindow: BrowserWindow | null = null;
 let backendProcess: ChildProcess | null = null;
 

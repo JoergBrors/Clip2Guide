@@ -29,6 +29,10 @@
 param(
     [string]$Root            = ".",
     [string]$PythonVersion   = "3.13",
+    # Pfad zum App-Quellverzeichnis (resources/) im paketierten Betrieb.
+    # Enthaelt requirements.txt und env.example die im ASAR-Paket liegen.
+    # Im manuellen Aufruf leer lassen – dann wird $Root verwendet.
+    [string]$AppSourceDir    = "",
     [switch]$ForceFFmpegDownload,
     [switch]$ForceAutoEditorDownload,
     [switch]$SkipNodeInstall,
@@ -172,9 +176,18 @@ if (-not $SkipPythonInstall) {
 
     python -m pip install --upgrade pip setuptools wheel
 
-    $RequirementsPath = Join-Path $BackendDir "requirements.txt"
+    # requirements.txt: erst im App-Quellverzeichnis suchen (paketierd in resources/),
+    # dann im Root (manueller Aufruf / Dev-Modus)
+    $RequirementsPath = $null
+    if ($AppSourceDir) {
+        $candidate = Join-Path $AppSourceDir "backend\requirements.txt"
+        if (Test-Path $candidate) { $RequirementsPath = $candidate }
+    }
+    if (-not $RequirementsPath) {
+        $RequirementsPath = Join-Path $BackendDir "requirements.txt"
+    }
     if (-not (Test-Path $RequirementsPath)) {
-        throw "requirements.txt nicht gefunden: $RequirementsPath"
+        throw "requirements.txt nicht gefunden (weder in AppSourceDir noch in $BackendDir)"
     }
 
     Write-Host "Installiere Python-Module aus $RequirementsPath..."
@@ -252,16 +265,26 @@ if (-not $SkipAutoEditor) {
 
 Write-Section ".env Konfiguration"
 
-$EnvExamplePath = Join-Path $Root ".env.example"
-$EnvPath        = Join-Path $Root ".env"
+# env.example: erst im App-Quellverzeichnis suchen (resources/env.example),
+# dann im Root (.env.example) – fuer manuellen Aufruf / Dev-Modus
+$EnvExamplePath = $null
+if ($AppSourceDir) {
+    $candidate = Join-Path $AppSourceDir "env.example"
+    if (Test-Path $candidate) { $EnvExamplePath = $candidate }
+}
+if (-not $EnvExamplePath) {
+    $candidate = Join-Path $Root ".env.example"
+    if (Test-Path $candidate) { $EnvExamplePath = $candidate }
+}
+$EnvPath = Join-Path $Root ".env"
 
 if (-not (Test-Path $EnvPath)) {
-    if (Test-Path $EnvExamplePath) {
+    if ($EnvExamplePath) {
         Copy-Item $EnvExamplePath $EnvPath -Force
-        Write-Host "[OK] .env aus .env.example erzeugt"
+        Write-Host "[OK] .env aus env.example erzeugt"
         Write-Host "     => Bitte API-Schluessel eintragen: $EnvPath"
     } else {
-        Write-Warning ".env.example nicht gefunden - .env wurde nicht erzeugt. Bitte manuell anlegen."
+        Write-Warning "env.example nicht gefunden - .env wurde nicht erzeugt. Bitte manuell anlegen."
     }
 } else {
     Write-Host "[OK] .env bereits vorhanden, wird nicht ueberschrieben"
