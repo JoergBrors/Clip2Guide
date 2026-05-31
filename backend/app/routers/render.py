@@ -36,6 +36,8 @@ async def _send(job_id: str, type_: str, step: str, message: str, percent: int =
 _RE_SCENE = re.compile(r"Szene\s+(\d+)/(\d+)", re.IGNORECASE)
 # Matches:  "  [de] Encoding: Frame 250/500 (50%)"
 _RE_ENCODING = re.compile(r"Encoding:\s*Frame\s+(\d+)/(\d+)\s*\((\d+)%\)", re.IGNORECASE)
+# Matches:  "  Kodiere Video (25 fps, CRF=23, Preset=faster)..."
+_RE_ENCODE_START = re.compile(r"Kodiere Video", re.IGNORECASE)
 
 
 # ── Vor-Render: Szenen-Dauern neu berechnen ────────────────────────────────────
@@ -162,14 +164,27 @@ def _render_lang_worker(
             )
             continue
 
+        if _RE_ENCODE_START.search(line):
+            # Einmalige Warnung sobald FFmpeg-Encoding startet
+            enc_start_pct = lang_base + int(lang_share * 0.85)
+            push(
+                "progress", "render",
+                f"[{lang}] Encoding gestartet – Video wird kodiert, "
+                f"dies kann je nach Länge bis zu 30 Minuten dauern ...",
+                enc_start_pct,
+            )
+            continue
+
         m2 = _RE_ENCODING.search(line)
         if m2:
-            enc_pct = int(m2.group(3))
+            enc_cur  = int(m2.group(1))
+            enc_tot  = int(m2.group(2))
+            enc_pct  = int(m2.group(3))
             # Encoding ist der letzte Schritt → letzte 15% des lang_share reservieren
             enc_offset = lang_base + int(lang_share * 0.85) + int(lang_share * 0.15 * enc_pct / 100)
             push(
                 "progress", "render",
-                f"[{lang}] Encoding {enc_pct}%",
+                f"[{lang}] Encoding {enc_pct}% – Frame {enc_cur}/{enc_tot}",
                 min(enc_offset, lang_base + lang_share - 1),
             )
 
