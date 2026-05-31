@@ -79,9 +79,20 @@ ok "Verzeichnisstruktur angelegt"
 section "Python Umgebung"
 
 if ! command -v python3 &>/dev/null; then
-  echo "python3 nicht gefunden. Bitte Python $PYTHON_VERSION installieren."
-  echo "  macOS: brew install python@$PYTHON_VERSION"
-  exit 1
+  echo "[WARN] python3 nicht gefunden – versuche automatische Installation..."
+  if command -v brew &>/dev/null; then
+    echo "Installiere python@$PYTHON_VERSION via Homebrew..."
+    brew install "python@$PYTHON_VERSION"
+    # Homebrew-Shims in PATH aufnehmen
+    BREW_PREFIX="$(brew --prefix)"
+    export PATH="$BREW_PREFIX/opt/python@$PYTHON_VERSION/bin:$PATH"
+    ok "Python installiert: $(python3 --version 2>&1)"
+  else
+    echo "[ERROR] Homebrew ist nicht installiert."
+    echo "  Bitte Homebrew installieren:  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    echo "  Danach dieses Skript erneut ausfuehren."
+    exit 1
+  fi
 fi
 
 PYTHON_FOUND=$(python3 --version 2>&1)

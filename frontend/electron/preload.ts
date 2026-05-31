@@ -26,6 +26,31 @@ contextBridge.exposeInMainWorld("clip2guide", {
     ipcRenderer.invoke("get-version"),
 });
 
+/** Setup-Wizard API – nur im Einrichtungsschritt verwendet. */
+contextBridge.exposeInMainWorld("setupAPI", {
+  isComplete: (): Promise<boolean> =>
+    ipcRenderer.invoke("setup:is-complete"),
+
+  runInitial: (): Promise<void> =>
+    ipcRenderer.invoke("setup:run-initial"),
+
+  onLog: (callback: (msg: string) => void): (() => void) => {
+    const listener = (_: Electron.IpcRendererEvent, msg: string) => callback(msg);
+    ipcRenderer.on("setup:log", listener);
+    return () => ipcRenderer.removeListener("setup:log", listener);
+  },
+
+  writeEnv: (values: Record<string, string>): Promise<string> =>
+    ipcRenderer.invoke("setup:write-env", values),
+
+  readEnv: (): Promise<Record<string, string>> =>
+    ipcRenderer.invoke("setup:read-env"),
+
+  complete: (): void => {
+    ipcRenderer.send("setup:completed");
+  },
+});
+
 export type Clip2GuideApi = {
   backendUrl: string;
   openPath: (filePath: string) => Promise<void>;
@@ -34,8 +59,18 @@ export type Clip2GuideApi = {
   getVersion: () => Promise<string>;
 };
 
+export type SetupApi = {
+  isComplete: () => Promise<boolean>;
+  runInitial: () => Promise<void>;
+  onLog: (callback: (msg: string) => void) => () => void;
+  writeEnv: (values: Record<string, string>) => Promise<string>;
+  readEnv: () => Promise<Record<string, string>>;
+  complete: () => void;
+};
+
 declare global {
   interface Window {
     clip2guide: Clip2GuideApi;
+    setupAPI: SetupApi;
   }
 }

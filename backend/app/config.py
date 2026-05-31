@@ -15,7 +15,13 @@ from pydantic import BaseModel, ConfigDict
 
 # Projektverzeichnis = ../../.. relativ zu backend/app/config.py
 _PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
-_env_file: Path = _PROJECT_ROOT / ".env"
+
+# ── .env-Pfad ermitteln ────────────────────────────────────────────────────────
+# Im paketierten Electron-Betrieb setzt der Haupt-Prozess APP_ENV_FILE auf
+# app.getPath('userData')/.env, damit Keys nie im Installationsverzeichnis liegen.
+# Im Dev-Modus / CI fehlt APP_ENV_FILE → klassischer Fallback auf Projektroot.
+_env_override = os.environ.get("APP_ENV_FILE", "")
+_env_file: Path = Path(_env_override) if _env_override else (_PROJECT_ROOT / ".env")
 
 # ── .env laden ────────────────────────────────────────────────────────────────
 # override=True stellt sicher, dass .env-Werte System-Umgebungsvariablen

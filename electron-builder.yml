@@ -1,0 +1,80 @@
+appId: de.brors.clip2guide
+productName: Clip2Guide
+copyright: Copyright © 2025–2026 Joerg Brors
+
+# Einstiegspunkt (nach npm run build)
+main: dist/electron/main.js
+
+# Einzuschließende Dateien (relativ zum Projektroot)
+files:
+  - dist/**
+  - backend/app/**
+  - backend/requirements.txt
+  - "!backend/.venv/**"
+  - "!backend/**/__pycache__/**"
+  - "!backend/**/*.pyc"
+
+# Zusätzliche Ressourcen – landen in resources/ und sind als normale Dateien
+# über process.resourcesPath zugänglich (werden nicht ins ASAR gepackt)
+extraResources:
+  - from: initial.ps1
+    to: initial.ps1
+  - from: initial.sh
+    to: initial.sh
+  - from: localstuff/env.example
+    to: env.example
+
+# Dateien niemals einschließen
+# (tools/ und workspace/ werden bei erstem Start heruntergeladen/erzeugt)
+asarUnpack:
+  - "**/*.py"
+  - "**/*.pyd"
+  - "**/*.so"
+  - "**/*.dylib"
+
+# Windows – NSIS-Installer
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: frontend/public/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  installerHeaderIcon: frontend/public/icon.ico
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+# macOS – DMG
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  category: public.app-category.productivity
+  icon: frontend/public/icon.icns
+  # Ohne Apple-Developer-Zertifikat: notarize deaktivieren
+  # (User muss Rechtsklick → Öffnen verwenden)
+  hardenedRuntime: false
+  gatekeeperAssess: false
+
+dmg:
+  title: "Clip2Guide ${version}"
+  background: frontend/public/dmg-background.png
+  window:
+    width: 540
+    height: 380
+
+# Ausgabeverzeichnis
+directories:
+  output: dist/release
+  buildResources: build
+
+# electron-builder generiert keine Auto-Update-Metadaten
+publish: []

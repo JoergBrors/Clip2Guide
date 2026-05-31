@@ -1,10 +1,11 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import VideoUpload from "./components/VideoUpload";
 import ImageAdjust from "./components/ImageAdjust";
 import ProcessingWizard from "./components/ProcessingWizard";
 import FrameStack from "./components/FrameStack";
 import SceneEditor from "./components/SceneEditor";
 import RenderPanel from "./components/RenderPanel";
+import SetupWizard from "./components/SetupWizard";
 import type { ImageInfo } from "./api/backendClient";
 import { api } from "./api/backendClient";
 
@@ -40,6 +41,22 @@ export default function App(): React.ReactElement {
   const [step, setStep] = useState<Step>("upload");
   const [project, setProject] = useState<ProjectState | null>(null);
   const [selectedFrames, setSelectedFrames] = useState<string[]>([]);
+
+  // Setup-Wizard: URL-Parameter ?setup=1 signalisiert, dass das Einrichtungsfenster aktiv ist.
+  const isSetupMode = new URLSearchParams(window.location.search).get("setup") === "1";
+  const [setupDone, setSetupDone] = useState(false);
+
+  useEffect(() => {
+    if (!isSetupMode) return;
+    // Prüfen ob .env bereits existiert (z.B. Neustart nach Setup)
+    window.setupAPI?.isComplete().then((complete) => {
+      if (complete) setSetupDone(true);
+    }).catch(() => {/* kein setupAPI im Browser-Dev-Modus */});
+  }, [isSetupMode]);
+
+  if (isSetupMode && !setupDone) {
+    return <SetupWizard onComplete={() => setSetupDone(true)} />;
+  }
 
   function handleUploaded(videoId: string, filename: string, hasAudio: boolean) {
     setProject({ mode: "video", videoId, filename, hasAudio });

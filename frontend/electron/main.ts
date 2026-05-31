@@ -7,6 +7,13 @@ const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 const BACKEND_PORT = 8787;
 const VITE_PORT = 5173;
 
+/** Pfad zur .env im userData-Verzeichnis des Betriebssystems.
+ *  z.B. %APPDATA%\Clip2Guide\.env (Windows), ~/Library/Application Support/Clip2Guide/.env (macOS)
+ *  Im Dev-Modus liegt .env weiterhin im Projektroot (keine userData-Datei erwartet). */
+export const USER_ENV_FILE = isDev
+  ? path.join(path.resolve(__dirname, "../../.."), ".env")
+  : path.join(app.getPath("userData"), ".env");
+
 let mainWindow: BrowserWindow | null = null;
 let backendProcess: ChildProcess | null = null;
 
@@ -44,7 +51,7 @@ function startBackend(): void {
     ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(BACKEND_PORT)],
     {
       cwd: backendDir,
-      env: { ...process.env },
+      env: { ...process.env, APP_ENV_FILE: USER_ENV_FILE },
       stdio: ["ignore", "pipe", "pipe"],
     }
   );
@@ -87,6 +94,32 @@ function createWindow(): void {
   });
 }
 
+/** Öffnet das Setup-Wizard-Fenster (kein Haupt-Fenster). */
+function createSetupWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 780,
+    height: 600,
+    resizable: false,
+    title: "Clip2Guide – Einrichtung",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+
+  if (isDev) {
+    win.loadURL(`http://localhost:${VITE_PORT}?setup=1`);
+  } else {
+    win.loadFile(
+      path.join(__dirname, "../../dist/renderer/index.html"),
+      { query: { setup: "1" } }
+    );
+  }
+  return win;
+}
+
 // ── IPC Handlers laden ────────────────────────────────────────────────────────
 
 function registerIpcHandlers(): void {
@@ -96,13 +129,23 @@ function registerIpcHandlers(): void {
 // ── App-Lifecycle ──────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
-  startBackend();
+  registerIpcHandlers();
 
-  // Kurz warten bis Backend bereit ist
-  setTimeout(() => {
-    createWindow();
-    registerIpcHandlers();
-  }, 1500);
+  const setupComplete = fs.existsSync(USER_ENV_FILE);
+  if (!setupComplete && !isDev) {
+    // Erster Start ohne .env → Setup-Wizard zeigen
+    const setupWin = createSetupWindow();
+    // Nach Setup-Abschluss: Wizard schließen, Backend starten, Hauptfenster öffnen
+    ipcMain.once("setup:completed", () => {
+      setupWin.close();
+      startBackend();
+      setTimeout(() => createWindow(), 1500);
+    });
+  } else {
+    startBackend();
+    // Kurz warten bis Backend bereit ist
+    setTimeout(() => createWindow(), 1500);
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

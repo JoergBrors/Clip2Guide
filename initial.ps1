@@ -128,11 +128,34 @@ Write-Host "[OK] Verzeichnisstruktur angelegt"
 
 Write-Section "Python Umgebung"
 
-Assert-Command -Command "py" -InstallHint "Bitte Python $PythonVersion installieren: winget install Python.Python.3.13"
+# ── Auto-Install Python falls nicht vorhanden ──────────────────────────────────
+if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
+    Write-Host "[WARN] py.exe (Python Launcher) nicht gefunden. Lade Python $PythonVersion Installer..."
+    $PyInstallerUrl = "https://www.python.org/ftp/python/3.13.4/python-3.13.4-amd64.exe"
+    $PyInstallerPath = Join-Path $env:TEMP "python-$PythonVersion-amd64.exe"
+    Download-File -Uri $PyInstallerUrl -OutFile $PyInstallerPath
+    Write-Host "Installiere Python $PythonVersion (still, nur fuer aktuellen Benutzer)..."
+    $pResult = Start-Process -FilePath $PyInstallerPath -ArgumentList @(
+        "/quiet",
+        "InstallAllUsers=0",
+        "PrependPath=1",
+        "Include_launcher=1",
+        "Include_pip=1"
+    ) -Wait -PassThru
+    Remove-Item $PyInstallerPath -Force -ErrorAction SilentlyContinue
+    if ($pResult.ExitCode -ne 0) {
+        throw "Python-Installer fehlgeschlagen (ExitCode=$($pResult.ExitCode)). Bitte manuell installieren: https://www.python.org/downloads/"
+    }
+    # PATH neu laden damit py.exe verfuegbar ist
+    $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";" + $env:PATH
+    Write-Host "[OK] Python $PythonVersion installiert"
+}
+
+Assert-Command -Command "py" -InstallHint "Bitte Python $PythonVersion installieren: https://www.python.org/downloads/"
 
 $PythonCheck = py -$PythonVersion --version 2>&1
 if ($LASTEXITCODE -ne 0) {
-    throw "Python $PythonVersion nicht gefunden. Bitte installieren: winget install Python.Python.3.13"
+    throw "Python $PythonVersion nicht gefunden. Bitte installieren: https://www.python.org/downloads/"
 }
 Write-Host "[OK] $PythonCheck"
 
