@@ -47,7 +47,6 @@ nsis:
   oneClick: false
   perMachine: true
   allowToChangeInstallationDirectory: true
-  installDir: $PROGRAMFILES64\Clip2Guide
   installerHeaderIcon: frontend/public/icon.ico
   deleteAppDataOnUninstall: false
   runAfterFinish: true
