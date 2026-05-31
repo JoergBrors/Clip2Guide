@@ -51,7 +51,7 @@ jobs:
       # macOS: ICO → ICNS konvertieren via Pillow + iconutil
       # icon.ico liegt im Repo (frontend/public/icon.ico)
       - name: Build icon.icns (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.platform == 'mac'
         shell: bash
         run: |
           mkdir -p /tmp/icon.iconset
