@@ -31,6 +31,7 @@ class RenderService:
 
         cmd: List[str] = [
             sys.executable,
+            "-u",           # unbuffered stdout/stderr – wichtig fuer Echtzeit-Streaming
             str(script_path),
             "--storyboard", str(storyboard_path),
             "--languages", ",".join(languages),

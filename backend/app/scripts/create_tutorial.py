@@ -212,14 +212,16 @@ def render_language(
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         print(f"  Schreibe Video: {output_path} (FPS={fps}, CRF={q['crf']}, Preset={q['preset']})", flush=True)
+        print(f"  Kodiere Video ({fps} fps, CRF={q['crf']}, Preset={q['preset']})...", flush=True)
         final.write_videofile(
             str(output_path),
             fps=fps,
             codec="libx264",
             audio_codec="aac",
             ffmpeg_params=["-crf", str(q["crf"]), "-preset", q["preset"]],
-            logger="bar",
+            logger=None,
         )
+        print(f"  Videoencoding abgeschlossen.", flush=True)
         # Alle Clips explizit schliessen damit Windows die Datei-Handles freigibt
         for clip in clips:
             try:
