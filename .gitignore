@@ -1,1 +1,58 @@
-node_modules
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+node_modules/
+dist/
+.vite/
+*.local
+
+# ── Python / Backend ──────────────────────────────────────────────────────────
+backend/.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Umgebungsvariablen ────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Workspace-Laufzeitdaten ───────────────────────────────────────────────────
+workspace/uploads/
+workspace/cut/
+workspace/normalized/
+workspace/frames/
+workspace/ai-output/
+workspace/output/
+workspace/jobs/
+workspace/logs/
+
+# ── Electron Build ────────────────────────────────────────────────────────────
+release/
+out/
+*.exe
+*.dmg
+*.AppImage
+*.snap
+electron/dist/
+
+# ── Editoren & OS ─────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+Thumbs.db
+.DS_Store
+
+# ── Lokales / Privates ────────────────────────────────────────────────────────
+localstuff/
+tools/
