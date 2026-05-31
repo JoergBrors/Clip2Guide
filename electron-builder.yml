@@ -2,9 +2,6 @@ appId: de.brors.clip2guide
 productName: Clip2Guide
 copyright: Copyright © 2025–2026 Joerg Brors
 
-# Einstiegspunkt (nach npm run build)
-main: dist/electron/main.js
-
 # Einzuschließende Dateien (relativ zum Projektroot)
 files:
   - dist/**
