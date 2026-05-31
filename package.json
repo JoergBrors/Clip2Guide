@@ -1,0 +1,32 @@
+{
+  "name": "clip2guide",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Clip2Guide – automatische Tutorial-Erstellung aus Bildschirmaufnahmen",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "dev:vite": "vite",
+    "dev:electron": "electron .",
+    "dev": "concurrently -k -n Vite,Electron -c cyan,magenta \"npm run dev:vite\" \"wait-on http://localhost:5173 && npm run build:electron && electron .\"",
+    "build:vite": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json --outDir dist/electron",
+    "build": "npm run build:vite && npm run build:electron",
+    "preview": "vite preview",
+    "lint": "eslint frontend/src --ext .ts,.tsx"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "electron": "^42.3.0",
+    "typescript": "^5.5.3",
+    "vite": "^8.0.14",
+    "wait-on": "^7.2.0"
+  }
+}
