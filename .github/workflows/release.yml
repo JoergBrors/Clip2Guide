@@ -43,37 +43,32 @@ jobs:
       - name: Build (Vite + Electron TypeScript)
         run: npm run build
 
-      # macOS: gültige Placeholder-Icons mit Python + iconutil erzeugen
-      - name: Ensure icon placeholders (macOS)
+      # macOS: ICO → ICNS konvertieren via Pillow + iconutil
+      # icon.ico liegt im Repo (frontend/public/icon.ico)
+      - name: Build icon.icns (macOS)
         if: matrix.os == 'macos-latest'
         shell: bash
         run: |
-          mkdir -p frontend/public /tmp/icon.iconset
+          mkdir -p /tmp/icon.iconset
+          pip3 install --quiet Pillow
           python3 - <<'PYEOF'
+          from PIL import Image
           import zlib, struct, os
-          def make_png(w, h, r=200, g=200, b=200):
+          os.makedirs('/tmp/icon.iconset', exist_ok=True)
+          ico = Image.open('frontend/public/icon.ico').convert('RGBA')
+          for size, name in [(16,'icon_16x16.png'),(32,'icon_32x32.png'),(128,'icon_128x128.png'),(256,'icon_256x256.png'),(512,'icon_512x512.png')]:
+              ico.resize((size, size), Image.LANCZOS).save(f'/tmp/icon.iconset/{name}')
+          # DMG-Hintergrund als einfaches grau-PNG erzeugen
+          def make_png(w, h):
               def chunk(tag, data):
                   crc = zlib.crc32(tag + data) & 0xffffffff
                   return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', crc)
-              rows = b''.join(b'\x00' + bytes([r, g, b]) * w for _ in range(h))
+              rows = b''.join(b'\x00' + bytes([240, 240, 240]) * w for _ in range(h))
               ihdr = struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)
-              return (b'\x89PNG\r\n\x1a\n' +
-                      chunk(b'IHDR', ihdr) +
-                      chunk(b'IDAT', zlib.compress(rows)) +
-                      chunk(b'IEND', b''))
-          for sz, name in [(16,'icon_16x16.png'),(32,'icon_32x32.png'),(128,'icon_128x128.png'),(256,'icon_256x256.png'),(512,'icon_512x512.png')]:
-              open(f'/tmp/icon.iconset/{name}', 'wb').write(make_png(sz, sz))
-          open('frontend/public/dmg-background.png', 'wb').write(make_png(540, 380, 240, 240, 240))
+              return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
+          open('frontend/public/dmg-background.png', 'wb').write(make_png(540, 380))
           PYEOF
           iconutil --convert icns /tmp/icon.iconset -o frontend/public/icon.icns
-
-      # Windows: gültiges ICO (1×1 px, 24bpp) mit Python erzeugen
-      - name: Ensure icon placeholder (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "frontend/public" | Out-Null
-          python -c "import struct, os; os.makedirs('frontend/public', exist_ok=True); bmp = struct.pack('<IiiHHIIiiII', 40, 1, 2, 1, 24, 0, 0, 0, 0, 0, 0) + bytes([255,255,255,0,0,0,0,0]); ico = struct.pack('<HHH', 0, 1, 1) + struct.pack('<BBBBHHIi', 1, 1, 0, 0, 1, 24, len(bmp), 22) + bmp; open('frontend/public/icon.ico', 'wb').write(ico)"
 
       - name: Package with electron-builder
         env:
