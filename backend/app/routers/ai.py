@@ -11,7 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from app import job_store
 from app.config import settings
-from app.models import AnalyzeRequest, AiProvider, JobStartResponse, StoryboardJson, StoryboardUpdateRequest
+from app.models import AnalyzeRequest, AiProvider, JobStartResponse, RewriteSceneRequest, StoryboardJson, StoryboardUpdateRequest
 from app.services.frame_stack_service import FrameStackService
 from app.services.storyboard_service import StoryboardService
 
@@ -166,3 +166,55 @@ async def update_storyboard(video_id: str, body: StoryboardUpdateRequest) -> Sto
     storyboard.video_id = video_id   # sicherstellen dass video_id konsistent ist
     _storyboard_svc.save(storyboard)
     return storyboard
+
+
+async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneRequest) -> None:
+    loop = asyncio.get_event_loop()
+    try:
+        await _send(job_id, "progress", "rewrite", "Lade Frames...", 10)
+        frames_dir = settings.frames_dir / video_id
+        frame_paths = sorted(
+            [frames_dir / fn for fn in req.image_group if (frames_dir / fn).exists()]
+        )
+        if not frame_paths:
+            raise FileNotFoundError(f"Keine Frames gefunden fuer Szene '{req.scene_id}'")
+
+        await _send(job_id, "progress", "rewrite", f"Analysiere {len(frame_paths)} Frames...", 30)
+
+        prompt_extra = (
+            f"Hinweis: Diese Frames gehoeren alle zu EINER zusammenhaengenden Szene. "
+            f"Erstelle genau eine Szene mit scene_id '{req.scene_id}'."
+        )
+        analyze_req = AnalyzeRequest(
+            video_id=video_id,
+            languages=req.languages,
+            ai_provider=req.ai_provider,
+            ai_model=req.ai_model,
+        )
+        provider = _get_provider(analyze_req)
+        storyboard = await loop.run_in_executor(
+            None, provider.analyze_frames, frame_paths, req.languages, video_id, prompt_extra
+        )
+
+        if not storyboard.scenes:
+            raise ValueError("KI hat keine Szene zurueckgegeben")
+
+        scene_texts = storyboard.scenes[0].texts
+        await _send(job_id, "completed", "rewrite", "Szene erfolgreich neu geschrieben.", 100, {
+            "texts": {lang: t.model_dump() for lang, t in scene_texts.items()},
+            "scene_id": req.scene_id,
+        })
+    except Exception as exc:
+        await _send(job_id, "error", "rewrite", str(exc))
+
+
+@router.post("/videos/{video_id}/rewrite-scene", response_model=JobStartResponse)
+async def rewrite_scene(
+    video_id: str,
+    req: RewriteSceneRequest,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+) -> JobStartResponse:
+    job_id = str(uuid.uuid4())
+    job_store.create_queue(job_id)
+    background_tasks.add_task(_run_rewrite_scene, video_id, job_id, req)
+    return JobStartResponse(job_id=job_id, video_id=video_id, message="Szene wird neu analysiert")

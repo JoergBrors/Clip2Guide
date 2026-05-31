@@ -115,6 +115,14 @@ class StoryboardUpdateRequest(BaseModel):
     storyboard: StoryboardJson
 
 
+class RewriteSceneRequest(BaseModel):
+    scene_id: str
+    image_group: List[str] = Field(default_factory=list)
+    languages: List[str] = Field(default_factory=lambda: ["de"])
+    ai_provider: Optional[AiProvider] = None
+    ai_model: Optional[str] = None
+
+
 # ── Response-Modelle ──────────────────────────────────────────────────────────
 
 class UploadResponse(BaseModel):

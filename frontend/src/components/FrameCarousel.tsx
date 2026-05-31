@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { api, FrameInfo } from "../api/backendClient";
 
 interface Props {
@@ -6,10 +6,16 @@ interface Props {
   frames: FrameInfo[];
   onAddToCustom?: (frame: FrameInfo) => void;
   customFrameFilenames?: Set<string>;
+  initialIndex?: number;
 }
 
-export default function FrameCarousel({ videoId, frames, onAddToCustom, customFrameFilenames }: Props): React.ReactElement {
-  const [idx, setIdx] = useState(0);
+export default function FrameCarousel({ videoId, frames, onAddToCustom, customFrameFilenames, initialIndex }: Props): React.ReactElement {
+  const [idx, setIdx] = useState(initialIndex ?? 0);
+  const [hovered, setHovered] = useState(false);
+
+  useEffect(() => {
+    if (initialIndex !== undefined) setIdx(Math.min(initialIndex, frames.length - 1));
+  }, [initialIndex, frames.length]);
   const current = frames[idx];
 
   if (!frames.length) return <p style={{ color: "#aaa" }}>Keine Frames vorhanden.</p>;
@@ -20,9 +26,21 @@ export default function FrameCarousel({ videoId, frames, onAddToCustom, customFr
     <div style={{ textAlign: "center" }}>
       <div style={{ position: "relative", display: "inline-block" }}>
         <img
-          src={api.frameImageUrl(videoId, current.filename)}
+          src={current.dataUrl ?? api.frameImageUrl(videoId, current.filename)}
           alt={`Frame ${idx + 1} von ${frames.length}`}
-          style={{ maxWidth: "100%", maxHeight: 360, borderRadius: 6, border: "1px solid #444" }}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            maxWidth: "100%",
+            maxHeight: 360,
+            borderRadius: 6,
+            border: "1px solid #444",
+            transform: hovered ? "scale(1.07)" : "scale(1)",
+            transformOrigin: "center center",
+            transition: "transform 0.18s ease",
+            cursor: "zoom-in",
+            display: "block",
+          }}
         />
         <div style={{ position: "absolute", bottom: 8, right: 10, background: "rgba(0,0,0,0.65)", color: "#ccc", fontSize: 11, padding: "2px 8px", borderRadius: 4 }}>
           {current.timestamp_seconds.toFixed(2)}s

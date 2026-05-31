@@ -100,25 +100,14 @@ if [[ "$SKIP_PYTHON" == "false" ]]; then
 
   python -m pip install --upgrade pip setuptools wheel
 
-  echo "Installiere Python-Module..."
-  python -m pip install --upgrade \
-    fastapi \
-    "uvicorn[standard]" \
-    pydantic \
-    python-dotenv \
-    python-multipart \
-    aiofiles \
-    requests \
-    httpx \
-    numpy \
-    opencv-python \
-    moviepy \
-    pillow \
-    gtts \
-    imageio \
-    imageio-ffmpeg \
-    google-generativeai \
-    openai
+  REQUIREMENTS_PATH="$BACKEND_DIR/requirements.txt"
+  if [[ ! -f "$REQUIREMENTS_PATH" ]]; then
+    echo "requirements.txt nicht gefunden: $REQUIREMENTS_PATH"
+    exit 1
+  fi
+
+  echo "Installiere Python-Module aus $REQUIREMENTS_PATH..."
+  python -m pip install --upgrade -r "$REQUIREMENTS_PATH"
 fi
 
 # ── FFmpeg (evermeet.cx statische Binaries) ────────────────────────────────────

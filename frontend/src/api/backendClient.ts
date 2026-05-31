@@ -69,6 +69,30 @@ export interface JobEvent {
   data?: Record<string, unknown>;
 }
 
+export interface ImageInfo {
+  image_id: string;
+  filename: string;
+  width: number;
+  height: number;
+}
+
+export interface ImageSetResponse {
+  session_id: string;
+  images: ImageInfo[];
+}
+
+export interface NormalizeRequest {
+  session_id: string;
+  target_width: number;
+  target_height: number;
+  mode: "crop" | "fit" | "stretch";
+}
+
+export interface NormalizeResponse {
+  session_id: string;
+  images: ImageInfo[];
+}
+
 // ── API-Funktionen ─────────────────────────────────────────────────────────────
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -89,6 +113,29 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     return request<UploadResponse>("/api/upload/video", { method: "POST", body: form });
+  },
+
+  uploadVideoWithProgress(file: File, uploadId: string): Promise<UploadResponse> {
+    const form = new FormData();
+    form.append("file", file);
+    const params = new URLSearchParams({ upload_id: uploadId, file_size: String(file.size) });
+    return request<UploadResponse>(`/api/upload/video?${params}`, { method: "POST", body: form });
+  },
+
+  openUploadEvents(
+    uploadId: string,
+    onEvent: (event: JobEvent) => void,
+  ): EventSource {
+    const src = new EventSource(`${BASE}/api/upload/${uploadId}/events`);
+    src.onmessage = (e) => {
+      try {
+        const parsed = JSON.parse(e.data as string) as JobEvent;
+        onEvent(parsed);
+      } catch {
+        // malformed event ignorieren
+      }
+    };
+    return src;
   },
 
   normalizeVideo(videoId: string, hasAudio: boolean): Promise<JobStartResponse> {
@@ -165,12 +212,48 @@ export const api = {
     });
   },
 
+  rewriteScene(
+    videoId: string,
+    sceneId: string,
+    imageGroup: string[],
+    languages: string[],
+    provider?: string,
+    model?: string,
+  ): Promise<JobStartResponse> {
+    return request<JobStartResponse>(`/api/videos/${videoId}/rewrite-scene`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scene_id: sceneId,
+        image_group: imageGroup,
+        languages,
+        ai_provider: provider,
+        ai_model: model,
+      }),
+    });
+  },
+
   uploadCustomFrames(videoId: string, files: File[]): Promise<FrameStack> {
     const form = new FormData();
     for (const file of files) {
       form.append("files", file);
     }
     return request<FrameStack>(`/api/videos/${videoId}/frames/upload`, { method: "POST", body: form });
+  },
+
+  async updateFrame(videoId: string, filename: string, dataUrl: string): Promise<void> {
+    // fetch(dataUrl) schlaegt in Electron fehl – direkt mit atob() konvertieren
+    const [header, base64] = dataUrl.split(",");
+    const mimeMatch = header.match(/data:([^;]+)/);
+    const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: mime });
+    const form = new FormData();
+    form.append("file", blob, filename);
+    await request<{ ok: boolean }>(`/api/videos/${videoId}/frames/${encodeURIComponent(filename)}`, {
+      method: "PUT",
+      body: form,
+    });
   },
 
   renderVideo(
@@ -191,6 +274,31 @@ export const api = {
         tts_slow: ttsSlow ?? false,
       }),
     });
+  },
+
+  uploadImages(files: File[]): Promise<ImageSetResponse> {
+    const form = new FormData();
+    for (const file of files) {
+      form.append("files", file);
+    }
+    return request<ImageSetResponse>("/api/upload/images", { method: "POST", body: form });
+  },
+
+  normalizeImages(req: NormalizeRequest): Promise<NormalizeResponse> {
+    return request<NormalizeResponse>("/api/images/normalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+  },
+
+  imagesToFrames(sessionId: string): Promise<FrameStack> {
+    return request<FrameStack>(`/api/images/${sessionId}/to-frames`, { method: "POST" });
+  },
+
+  imageUrl(sessionId: string, imageId: string, normalized = false): string {
+    const q = normalized ? "?normalized=true" : "";
+    return `${BASE}/api/images/${sessionId}/${imageId}${q}`;
   },
 };
 

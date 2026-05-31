@@ -1,17 +1,40 @@
 import React, { useState } from "react";
 import VideoUpload from "./components/VideoUpload";
+import ImageAdjust from "./components/ImageAdjust";
 import ProcessingWizard from "./components/ProcessingWizard";
 import FrameStack from "./components/FrameStack";
 import SceneEditor from "./components/SceneEditor";
 import RenderPanel from "./components/RenderPanel";
+import type { ImageInfo } from "./api/backendClient";
+import { api } from "./api/backendClient";
 
-type Step = "upload" | "processing" | "frames" | "storyboard" | "render";
+type Step = "upload" | "image-adjust" | "processing" | "frames" | "storyboard" | "render";
+type ProjectMode = "video" | "images";
 
 interface ProjectState {
+  mode: ProjectMode;
   videoId: string;
   filename: string;
   hasAudio: boolean;
+  imageSessionId?: string;
+  imageInfos?: ImageInfo[];
 }
+
+const VIDEO_STEPS: Array<{ id: Step; label: string }> = [
+  { id: "upload",     label: "1 Upload" },
+  { id: "processing", label: "2 Verarbeitung" },
+  { id: "frames",     label: "3 Frames" },
+  { id: "storyboard", label: "4 Storyboard" },
+  { id: "render",     label: "5 Rendering" },
+];
+
+const IMAGE_STEPS: Array<{ id: Step; label: string }> = [
+  { id: "upload",       label: "1 Upload" },
+  { id: "image-adjust", label: "2 Anpassung" },
+  { id: "frames",       label: "3 Frames" },
+  { id: "storyboard",   label: "4 Storyboard" },
+  { id: "render",       label: "5 Rendering" },
+];
 
 export default function App(): React.ReactElement {
   const [step, setStep] = useState<Step>("upload");
@@ -19,8 +42,26 @@ export default function App(): React.ReactElement {
   const [selectedFrames, setSelectedFrames] = useState<string[]>([]);
 
   function handleUploaded(videoId: string, filename: string, hasAudio: boolean) {
-    setProject({ videoId, filename, hasAudio });
+    setProject({ mode: "video", videoId, filename, hasAudio });
     setStep("processing");
+  }
+
+  function handleImagesUploaded(sessionId: string, images: ImageInfo[]) {
+    setProject({
+      mode: "images",
+      videoId: "",
+      filename: `${images.length} Bilder`,
+      hasAudio: false,
+      imageSessionId: sessionId,
+      imageInfos: images,
+    });
+    setStep("image-adjust");
+  }
+
+  async function handleImageAdjustDone(_sessionId: string, _images: ImageInfo[]) {
+    const stack = await api.imagesToFrames(_sessionId);
+    setProject((prev) => prev ? { ...prev, videoId: stack.video_id } : prev);
+    setStep("frames");
   }
 
   function handleProcessed() {
@@ -32,9 +73,16 @@ export default function App(): React.ReactElement {
     setStep("storyboard");
   }
 
+  function handleImageFramesDone(frames: string[]) {
+    setSelectedFrames(frames);
+    setStep("storyboard");
+  }
+
   function handleStoryboardDone() {
     setStep("render");
   }
+
+  const currentSteps = project?.mode === "images" ? IMAGE_STEPS : VIDEO_STEPS;
 
   return (
     <div style={styles.root}>
@@ -44,18 +92,15 @@ export default function App(): React.ReactElement {
           <span style={styles.subtitle}>{project.filename}</span>
         )}
         <nav style={styles.nav} aria-label="Workflow-Schritte">
-          {(["upload", "processing", "frames", "storyboard", "render"] as Step[]).map((s) => (
+          {currentSteps.map(({ id, label }) => (
             <button
-              key={s}
-              style={{ ...styles.navBtn, ...(step === s ? styles.navBtnActive : {}) }}
-              onClick={() => project && setStep(s)}
-              disabled={!project && s !== "upload"}
-              aria-current={step === s ? "step" : undefined}
+              key={id}
+              style={{ ...styles.navBtn, ...(step === id ? styles.navBtnActive : {}) }}
+              onClick={() => project && setStep(id)}
+              disabled={!project && id !== "upload"}
+              aria-current={step === id ? "step" : undefined}
             >
-              {s === "upload" ? "1 Upload" :
-               s === "processing" ? "2 Verarbeitung" :
-               s === "frames" ? "3 Frames" :
-               s === "storyboard" ? "4 Storyboard" : "5 Rendering"}
+              {label}
             </button>
           ))}
         </nav>
@@ -63,10 +108,17 @@ export default function App(): React.ReactElement {
 
       <main style={styles.main}>
         {step === "upload" && (
-          <VideoUpload onUploaded={handleUploaded} />
+          <VideoUpload onUploaded={handleUploaded} onImagesUploaded={handleImagesUploaded} />
+        )}
+        {step === "image-adjust" && project?.imageSessionId && project.imageInfos && (
+          <ImageAdjust
+            sessionId={project.imageSessionId}
+            images={project.imageInfos}
+            onDone={handleImageAdjustDone}
+          />
         )}
         {/* ProcessingWizard bleibt gemountet damit laufende Jobs nicht abgebrochen werden */}
-        {project && (
+        {project && project.mode === "video" && (
           <div style={{ display: step === "processing" ? "block" : "none" }}>
             <ProcessingWizard
               videoId={project.videoId}
@@ -75,13 +127,27 @@ export default function App(): React.ReactElement {
             />
           </div>
         )}
-        {step === "frames" && project && (
+        {step === "frames" && project && project.mode === "video" && (
           <FrameStack
             videoId={project.videoId}
             onDone={handleFramesDone}
           />
         )}
-        {step === "storyboard" && project && (
+        {step === "frames" && project && project.mode === "images" && project.videoId && (
+          <FrameStack
+            videoId={project.videoId}
+            onDone={handleImageFramesDone}
+            disableExtract
+          />
+        )}
+        {step === "storyboard" && project && project.mode === "video" && (
+          <SceneEditor
+            videoId={project.videoId}
+            selectedFrames={selectedFrames}
+            onDone={handleStoryboardDone}
+          />
+        )}
+        {step === "storyboard" && project && project.mode === "images" && project.videoId && (
           <SceneEditor
             videoId={project.videoId}
             selectedFrames={selectedFrames}

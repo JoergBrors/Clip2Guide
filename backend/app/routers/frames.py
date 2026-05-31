@@ -91,6 +91,27 @@ _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 _ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
+@router.put("/videos/{video_id}/frames/{filename}")
+async def replace_frame(
+    video_id: str,
+    filename: str,
+    file: UploadFile = File(...),
+) -> dict:
+    """Ersetzt den Bildinhalt eines bestehenden Frames (nach Bearbeitung im Editor)."""
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
+    content_type = (file.content_type or "").lower()
+    suffix = Path(filename).suffix.lower() if "." in filename else ""
+    if content_type not in _ALLOWED_IMAGE_TYPES and suffix not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Nicht erlaubter Dateityp: {content_type}")
+    path = settings.frames_dir / video_id / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Frame nicht gefunden: {filename}")
+    data = await file.read()
+    path.write_bytes(data)
+    return {"ok": True, "filename": filename, "video_id": video_id}
+
+
 @router.post("/videos/{video_id}/frames/upload", response_model=FrameStack)
 async def upload_custom_frames(
     video_id: str,

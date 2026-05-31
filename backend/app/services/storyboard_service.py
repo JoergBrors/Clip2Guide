@@ -70,7 +70,13 @@ def parse_storyboard_response(
     if not isinstance(scenes_raw, list) or len(scenes_raw) == 0:
         raise ValueError("KI-Antwort enthaelt keine Szenen.")
 
+    # Validierungsmenge: alle uebergebenen Frames PLUS alle Dateien im Frames-Verzeichnis
+    # (KI bekommt manchmal Dateinamen leicht abweichend — lieber zu permissiv als zu restriktiv)
     all_frame_names = {p.name for p in frame_paths}
+    if frame_paths:
+        frames_dir = frame_paths[0].parent
+        if frames_dir.is_dir():
+            all_frame_names |= {p.name for p in frames_dir.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png")}
     scenes: List[Scene] = []
 
     for raw in scenes_raw:

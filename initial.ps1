@@ -149,25 +149,13 @@ if (-not $SkipPythonInstall) {
 
     python -m pip install --upgrade pip setuptools wheel
 
-    Write-Host "Installiere Python-Module fuer Backend, Videoanalyse, KI und Rendering..."
-    python -m pip install --upgrade `
-        fastapi `
-        "uvicorn[standard]" `
-        pydantic `
-        python-dotenv `
-        python-multipart `
-        aiofiles `
-        requests `
-        httpx `
-        numpy `
-        opencv-python `
-        moviepy `
-        pillow `
-        gtts `
-        imageio `
-        imageio-ffmpeg `
-        google-generativeai `
-        openai
+    $RequirementsPath = Join-Path $BackendDir "requirements.txt"
+    if (-not (Test-Path $RequirementsPath)) {
+        throw "requirements.txt nicht gefunden: $RequirementsPath"
+    }
+
+    Write-Host "Installiere Python-Module aus $RequirementsPath..."
+    python -m pip install --upgrade -r $RequirementsPath
 }
 
 # ── FFmpeg ─────────────────────────────────────────────────────────────────────

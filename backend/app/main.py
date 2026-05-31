@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from app import job_store
 from app.models import HealthResponse
-from app.routers import ai, frames, processing, render, upload
+from app.routers import ai, frames, images, processing, render, upload
 
 app = FastAPI(
     title="Clip2Guide API",
@@ -32,6 +32,7 @@ app.add_middleware(
 # ── Router ────────────────────────────────────────────────────────────────────
 
 app.include_router(upload.router,     prefix="/api", tags=["Upload"])
+app.include_router(images.router,     prefix="/api", tags=["Images"])
 app.include_router(processing.router, prefix="/api", tags=["Processing"])
 app.include_router(frames.router,     prefix="/api", tags=["Frames"])
 app.include_router(ai.router,         prefix="/api", tags=["AI"])
