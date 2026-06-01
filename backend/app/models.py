@@ -47,6 +47,17 @@ class Scene(BaseModel):
         default_factory=dict,
         description="Sprachcode -> TextPanel, z.B. {'de': TextPanel(...)}"
     )
+    slide_panels: Dict[str, List[TextPanel]] = Field(
+        default_factory=dict,
+        description="Sprachcode -> Liste von TextPanel je Bild in image_group. "
+                    "Wenn befüllt, bekommt jedes Bild seinen eigenen Text-Panel."
+    )
+    render_hints: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="KI-generierte Render-Hinweise: transition (fade|cut), "
+                    "image_durations (List[float] in Sekunden), "
+                    "text_scroll_speed (float px/s, 0=auto)."
+    )
     duration_seconds: float = Field(default=5.0, ge=0.5, description="Gewuenschte Laenge dieser Szene in Sekunden")
 
 
@@ -135,6 +146,16 @@ class RewriteSceneRequest(BaseModel):
         None,
         description="Dateiname -> optionale KI-Anweisung pro Bild."
     )
+
+
+class EnrichRequest(BaseModel):
+    languages: List[str] = Field(default_factory=lambda: ["de"])
+    scene_ids: Optional[List[str]] = Field(
+        None,
+        description="Nur diese Szenen anreichern. None = alle Szenen ohne slide_panels anreichern."
+    )
+    ai_provider: Optional[AiProvider] = None
+    ai_model: Optional[str] = None
 
 
 # ── Response-Modelle ──────────────────────────────────────────────────────────

@@ -31,3 +31,11 @@ class AiProviderBase(ABC):
         :param prompt_extra:  Optionaler Zusatz-Kontext fuer den Prompt.
         """
         ...
+
+    @abstractmethod
+    def complete_text(self, prompt: str) -> str:
+        """
+        Schickt einen Text-Prompt an das Modell und gibt die Antwort als String zurueck.
+        Kein Bildinhalt, nur Text. Wird fuer Enrich-Aufgaben verwendet.
+        """
+        ...

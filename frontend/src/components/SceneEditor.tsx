@@ -53,6 +53,10 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
   const [rewriteMsg, setRewriteMsg] = useState("");
   const [rewriteProgress, setRewriteProgress] = useState(0);
 
+  // Anreicherung (slide_panels + render_hints)
+  const [enriching, setEnriching] = useState(false);
+  const [enrichMsg, setEnrichMsg] = useState("");
+
   // Throttle-Dialog: wird gesetzt wenn ein KI-Anbieter 503/429 zurueckgibt
   const [throttleDialog, setThrottleDialog] = useState<{
     context: "analyze" | "rewrite";
@@ -116,7 +120,15 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
         setAnalyzeProgress(ev.percent);
         if (ev.type === "completed") {
           setAnalyzing(false);
-          api.getStoryboard(videoId).then(setStoryboard).catch(console.error);
+          api.getStoryboard(videoId).then((sb) => {
+            setStoryboard(sb);
+            // Nach der Analyse automatisch Szenen mit mehreren Bildern anreichern
+            const langs = sb.languages.length ? sb.languages : languages;
+            const multiImgScenes = sb.scenes.filter((s) => s.image_group.length > 1);
+            if (multiImgScenes.length > 0) {
+              triggerEnrich(langs, multiImgScenes.map((s) => s.scene_id));
+            }
+          }).catch(console.error);
         } else if (ev.type === "throttled") {
           setAnalyzing(false);
           const alts = (ev.data?.alternatives ?? []) as ThrottleAlternative[];
@@ -366,11 +378,45 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     setSaving(true);
     try {
       await api.updateStoryboard(videoId, storyboard);
+      // Im Hintergrund Szenen anreichern die mehrere Bilder haben und noch keine slide_panels
+      const langs = storyboard.languages.length ? storyboard.languages : languages;
+      const needEnrich = storyboard.scenes.filter(
+        (s) => s.image_group.length > 1 && !s.slide_panels?.[langs[0]]?.length
+      );
+      if (needEnrich.length > 0) {
+        triggerEnrich(langs, needEnrich.map((s) => s.scene_id));
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Speichern fehlgeschlagen");
     } finally {
       setSaving(false);
     }
+  }
+
+  function triggerEnrich(langs: string[], sceneIds?: string[]) {
+    if (enriching) return;
+    setEnriching(true);
+    setEnrichMsg("Anreicherung läuft...");
+    api.enrichStoryboard(videoId, langs, sceneIds, provider, selectedModel || undefined)
+      .then(({ job_id }) => {
+        subscribeToJob(job_id, (ev: JobEvent) => {
+          setEnrichMsg(ev.message);
+          if (ev.type === "completed") {
+            setEnriching(false);
+            setEnrichMsg("");
+            // Aktualisiertes Storyboard laden damit slide_panels im State sind
+            if (ev.data?.storyboard) {
+              setStoryboard(ev.data.storyboard as StoryboardJson);
+            } else {
+              api.getStoryboard(videoId).then(setStoryboard).catch(console.error);
+            }
+          } else if (ev.type === "error" || ev.type === "throttled") {
+            setEnriching(false);
+            setEnrichMsg("");
+          }
+        });
+      })
+      .catch(() => { setEnriching(false); setEnrichMsg(""); });
   }
 
   const scene: Scene | undefined = storyboard?.scenes[activeScene];
@@ -399,7 +445,26 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
             {storyboard && <button className="btn btn-primary" onClick={saveStoryboard} disabled={saving}>
               {saving ? "Speichern..." : "Speichern"}
             </button>}
-            {storyboard && <button className="btn btn-success" onClick={onDone}>Weiter → Rendering</button>}
+            {storyboard && (
+              <button
+                className="btn btn-success"
+                onClick={() => {
+                  // Vor dem Weiter ggf. Anreicherung starten wenn nicht schon erledigt
+                  if (!enriching) {
+                    const langs = storyboard.languages.length ? storyboard.languages : languages;
+                    const needEnrich = storyboard.scenes.filter(
+                      (s) => s.image_group.length > 1 && !s.slide_panels?.[langs[0]]?.length
+                    );
+                    if (needEnrich.length > 0) {
+                      triggerEnrich(langs, needEnrich.map((s) => s.scene_id));
+                    }
+                  }
+                  onDone();
+                }}
+              >
+                Weiter → Rendering
+              </button>
+            )}
           </div>
         </div>
 
@@ -482,6 +547,12 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
         )}
 
         {error && <p role="alert" style={{ color: "#ef5350" }}>Fehler: {error}</p>}
+
+        {enriching && enrichMsg && (
+          <p style={{ color: "#81c784", fontSize: 12, margin: "4px 0 0" }}>
+            ⏳ {enrichMsg}
+          </p>
+        )}
 
         {throttleDialog && (
           <div role="alert" style={{

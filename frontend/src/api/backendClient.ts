@@ -43,13 +43,21 @@ export interface TextPanel {
   speaker_notes: string;
 }
 
+export interface RenderHints {
+  transition?: "fade" | "cut";
+  image_durations?: number[];
+  text_scroll_speed?: number;
+}
+
 export interface Scene {
   scene_id: string;
   start_frame: string;
   end_frame: string | null;
   image_group: string[];
-  image_prompts: Record<string, string>;  // optional – wird vom Backend mit {} befuellt
+  image_prompts: Record<string, string>;  // optional – wird vom Backend mit {} befüllt
   texts: Record<string, TextPanel>;
+  slide_panels?: Record<string, TextPanel[]>;
+  render_hints?: RenderHints;
   duration_seconds: number;
 }
 
@@ -314,6 +322,25 @@ export const api = {
   imageUrl(sessionId: string, imageId: string, normalized = false): string {
     const q = normalized ? "?normalized=true" : "";
     return `${BASE}/api/images/${sessionId}/${imageId}${q}`;
+  },
+
+  enrichStoryboard(
+    videoId: string,
+    languages: string[],
+    sceneIds?: string[],
+    provider?: string,
+    model?: string,
+  ): Promise<JobStartResponse> {
+    return request<JobStartResponse>(`/api/videos/${videoId}/storyboard/enrich`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        languages,
+        scene_ids: sceneIds ?? null,
+        ai_provider: provider,
+        ai_model: model,
+      }),
+    });
   },
 };
 

@@ -58,3 +58,12 @@ class OpenAiProvider(AiProviderBase):
         raw_json = response.choices[0].message.content or "{}"
         storyboard = parse_storyboard_response(raw_json, video_id, frame_paths, languages)
         return storyboard
+
+    def complete_text(self, prompt: str) -> str:
+        response = self._client.chat.completions.create(
+            model=self._model_name,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            max_tokens=2048,
+        )
+        return response.choices[0].message.content or "{}"

@@ -142,6 +142,80 @@ def create_text_panel_image(heading: str, body: str, width: int, height: int) ->
     return img
 
 
+def _render_text_to_image(heading: str, body: str, width: int) -> Image.Image:
+    """Erstellt ein PIL-Bild dessen Hoehe sich dem Inhalt anpasst (kein Abschneiden)."""
+    font_h = _load_font(FONT_SIZE_HEADING)
+    font_b = _load_font(FONT_SIZE_BODY)
+    max_w = width - 2 * TEXT_PADDING
+
+    # Dummy-Draw fuer Texthoehenmessung
+    tmp = Image.new("RGB", (width, 100), TEXT_BG_COLOR)
+    draw = ImageDraw.Draw(tmp)
+    wrapped_h = _wrap_text(heading, font_h, max_w, draw)
+    wrapped_b = _wrap_text(body, font_b, max_w, draw)
+
+    bbox_h = draw.multiline_textbbox((TEXT_PADDING, TEXT_PADDING), wrapped_h, font=font_h, spacing=6)
+    y_after_heading = bbox_h[3] + 16
+    bbox_b = draw.multiline_textbbox((TEXT_PADDING, y_after_heading), wrapped_b, font=font_b, spacing=8)
+    total_h = max(bbox_b[3] + TEXT_PADDING, 120)
+
+    img = Image.new("RGB", (width, total_h), TEXT_BG_COLOR)
+    draw = ImageDraw.Draw(img)
+    draw.multiline_text((TEXT_PADDING, TEXT_PADDING), wrapped_h, fill=TEXT_FG_COLOR, font=font_h, spacing=6)
+    draw.multiline_text((TEXT_PADDING, y_after_heading), wrapped_b, fill=(200, 200, 200), font=font_b, spacing=8)
+    return img
+
+
+def _build_scrolling_panel_clip(
+    heading: str,
+    body: str,
+    panel_width: int,
+    panel_height: int,
+    x_offset: int,
+    duration: float,
+    tmp_path: Path,
+) -> "ImageClip":
+    """Erstellt einen (ggf. scrollenden) Panel-Clip fuer einen Text.
+
+    - Passt Text in Panelhoehe: statischer Clip.
+    - Text hoeher als Panel: scrollt vertikal von oben nach unten (Text wandert nach oben).
+    """
+    full_img = _render_text_to_image(heading, body, panel_width)
+    full_h = full_img.height
+
+    if full_h <= panel_height:
+        # Auf volle Panelhoehe mit Hintergrundfarbe auffuellen
+        bg = Image.new("RGB", (panel_width, panel_height), TEXT_BG_COLOR)
+        bg.paste(full_img, (0, 0))
+        bg.save(str(tmp_path))
+        return (
+            ImageClip(str(tmp_path))
+            .with_duration(duration)
+            .with_position((x_offset, 0))
+        )
+
+    # Text laenger als Panel – scrollend
+    full_img.save(str(tmp_path))
+    scroll_dist = full_h - panel_height
+    wait_start = min(1.0, duration * 0.1)
+    wait_end   = min(0.5, duration * 0.05)
+    scroll_time = max(duration - wait_start - wait_end, 0.5)
+
+    def _make_pos(sd: float, px: int, ws: float, x: int):
+        def _pos(t: float):
+            if t <= ws:
+                return (x, 0)
+            progress = min((t - ws) / sd, 1.0)
+            return (x, -int(progress * px))
+        return _pos
+
+    return (
+        ImageClip(str(tmp_path))
+        .with_duration(duration)
+        .with_position(_make_pos(scroll_time, scroll_dist, wait_start, x_offset))
+    )
+
+
 def create_tts_audio(text: str, lang: str, out_path: Path, slow: bool = False) -> Path:
     """Erzeugt eine MP3-Datei via gTTS."""
     tts = gTTS(text=text, lang=lang[:2], slow=slow)
@@ -181,24 +255,59 @@ def build_scene_clip(
         except Exception as exc:
             print(f"  [WARN] TTS fehlgeschlagen fuer Szene {scene.scene_id}: {exc}", file=sys.stderr)
 
-    # ── 2. Frames als Slideshow (links) ───────────────────────────────────────
-    frame_clips = []
+    # ── 2. Frames als Slideshow (links) mit optionalen slide_panels ─────────
     image_group = scene.image_group or (
         [scene.start_frame] if scene.start_frame else []
     )
+    hints = scene.render_hints or {}
+    transition = hints.get("transition", "cut")
+    img_durations_hint: list = hints.get("image_durations", [])
+    slide_panels = (scene.slide_panels or {}).get(lang, [])
+    use_slide_panels = bool(slide_panels) and len(slide_panels) >= len(image_group)
 
-    if image_group:
-        frame_dur = actual_duration / max(len(image_group), 1)
-        for fname in image_group:
-            fp = frames_dir / fname
-            if not fp.exists():
-                continue
-            clip = (
-                ImageClip(str(fp))
-                .with_duration(frame_dur)
-                .resized((IMAGE_W, H))
-            )
-            frame_clips.append(clip)
+    # Bildzeiten bestimmen
+    def _img_dur(idx: int, fallback: float) -> float:
+        if idx < len(img_durations_hint):
+            try:
+                return max(float(img_durations_hint[idx]), 2.0)
+            except (TypeError, ValueError):
+                pass
+        return fallback
+
+    if use_slide_panels:
+        # Jedes Bild hat eigene Dauer aus render_hints; Gesamt-duration aktualisieren
+        explicit_total = sum(
+            _img_dur(i, actual_duration / max(len(image_group), 1))
+            for i in range(len(image_group))
+        )
+        actual_duration = max(actual_duration, explicit_total)
+
+    frame_dur_default = actual_duration / max(len(image_group), 1)
+    frame_clips = []
+    panel_clips = []
+
+    for img_idx, fname in enumerate(image_group):
+        fp = frames_dir / fname
+        if not fp.exists():
+            continue
+        fdur = _img_dur(img_idx, frame_dur_default)
+
+        img_clip = ImageClip(str(fp)).with_duration(fdur).resized((IMAGE_W, H))
+        if transition == "fade" and img_idx > 0:
+            try:
+                img_clip = img_clip.with_effects([__import__("moviepy").video.fx.CrossFadeIn(0.4)])
+            except Exception:
+                pass  # CrossFadeIn nicht verfuegbar – ignorieren
+        frame_clips.append(img_clip)
+
+        if use_slide_panels:
+            sp = slide_panels[img_idx]
+            tmp_p = tmp_dir / f"panel_{scene_idx}_{lang}_{img_idx}.jpg"
+            panel_clips.append(_build_scrolling_panel_clip(
+                sp.get("heading", text_panel.heading) if isinstance(sp, dict) else sp.heading,
+                sp.get("body", text_panel.body) if isinstance(sp, dict) else sp.body,
+                TEXT_PANEL_WIDTH, H, IMAGE_W, fdur, tmp_p,
+            ))
 
     if not frame_clips:
         placeholder = Image.new("RGB", (IMAGE_W, H), (0, 0, 0))
@@ -206,20 +315,45 @@ def build_scene_clip(
         placeholder.save(str(tmp_ph))
         frame_clips = [ImageClip(str(tmp_ph)).with_duration(actual_duration)]
 
-    slideshow = concatenate_videoclips(frame_clips).with_position((0, 0))
+    # TTS neu berechnen wenn slide_panels Speaker-Texte enthalten
+    if use_slide_panels and audio_clip is None:
+        full_speaker = " ".join(
+            (sp.get("speaker_notes", "") if isinstance(sp, dict) else sp.speaker_notes)
+            for sp in slide_panels
+        ).strip()
+        if full_speaker:
+            try:
+                tts_path2 = tmp_dir / f"tts_{scene_idx}_{lang}_slides.mp3"
+                create_tts_audio(full_speaker, lang, tts_path2, slow=tts_slow)
+                raw2 = AudioFileClip(str(tts_path2))
+                audio_clip = raw2
+                actual_duration = max(actual_duration, raw2.duration)
+            except Exception as exc:
+                print(f"  [WARN] TTS (slide_panels) fehlgeschlagen: {exc}", file=sys.stderr)
 
-    # ── 3. Text-Panel (rechts) ────────────────────────────────────────────────
-    panel_img = create_text_panel_image(text_panel.heading, text_panel.body, TEXT_PANEL_WIDTH, H)
-    tmp_panel = tmp_dir / f"panel_{scene_idx}_{lang}.jpg"
-    panel_img.save(str(tmp_panel))
-    panel_clip = (
-        ImageClip(str(tmp_panel))
-        .with_duration(actual_duration)
-        .with_position((IMAGE_W, 0))
-    )
+    if use_slide_panels:
+        # Jedes Bild mit eigenem Panel als separates CompositeVideoClip zusammenbauen
+        sub_clips = []
+        for img_clip, pan_clip in zip(frame_clips, panel_clips):
+            sub = CompositeVideoClip(
+                [img_clip.with_position((0, 0)), pan_clip],
+                size=(W, H)
+            ).with_duration(img_clip.duration)
+            sub_clips.append(sub)
+        composite = concatenate_videoclips(sub_clips, method="chain")
+    else:
+        slideshow = concatenate_videoclips(frame_clips).with_position((0, 0))
+        # ── 3. Text-Panel (rechts, ggf. scrollend) ───────────────────────────
+        tmp_panel = tmp_dir / f"panel_{scene_idx}_{lang}.jpg"
+        panel_clip = _build_scrolling_panel_clip(
+            text_panel.heading, text_panel.body,
+            TEXT_PANEL_WIDTH, H, IMAGE_W, actual_duration, tmp_panel,
+        )
+        composite = CompositeVideoClip([slideshow, panel_clip], size=(W, H))
 
-    # ── 4. Composite ──────────────────────────────────────────────────────────
-    composite = CompositeVideoClip([slideshow, panel_clip], size=(W, H)).with_duration(actual_duration)
+    composite = composite.with_duration(actual_duration)
+
+    # ── 4. Audio anheften ─────────────────────────────────────────────────────
     if audio_clip is not None:
         composite = composite.with_audio(audio_clip)
 

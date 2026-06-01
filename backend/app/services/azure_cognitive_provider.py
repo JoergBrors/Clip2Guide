@@ -65,3 +65,11 @@ class AzureCognitiveProvider(AiProviderBase):
 
         raw_json = response.choices[0].message.content or "{}"
         return parse_storyboard_response(raw_json, video_id, frame_paths, languages)
+
+    def complete_text(self, prompt: str) -> str:
+        response = self._client.chat.completions.create(
+            model=self._deployment,
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=2048,
+        )
+        return response.choices[0].message.content or "{}"

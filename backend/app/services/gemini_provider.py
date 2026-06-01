@@ -73,3 +73,13 @@ class GeminiProvider(AiProviderBase):
         raw_json = response.text.strip()
         storyboard = parse_storyboard_response(raw_json, video_id, frame_paths, languages)
         return storyboard
+
+    def complete_text(self, prompt: str) -> str:
+        response = self._client.models.generate_content(
+            model=self._model_name,
+            contents=[prompt],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+            ),
+        )
+        return response.text.strip()

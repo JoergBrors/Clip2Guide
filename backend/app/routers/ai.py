@@ -11,9 +11,9 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from app import job_store
 from app.config import settings
-from app.models import AnalyzeRequest, AiProvider, JobStartResponse, RewriteSceneRequest, StoryboardJson, StoryboardUpdateRequest
+from app.models import AnalyzeRequest, AiProvider, EnrichRequest, JobStartResponse, RewriteSceneRequest, StoryboardJson, StoryboardUpdateRequest
 from app.services.frame_stack_service import FrameStackService
-from app.services.storyboard_service import StoryboardService
+from app.services.storyboard_service import StoryboardService, build_enrich_prompt
 
 router = APIRouter()
 _stack_svc = FrameStackService()
@@ -411,3 +411,151 @@ async def rewrite_scene(
     job_store.create_queue(job_id)
     background_tasks.add_task(_run_rewrite_scene, video_id, job_id, req)
     return JobStartResponse(job_id=job_id, video_id=video_id, message="Szene wird neu analysiert")
+
+
+# ── Enrich: slide_panels + render_hints per KI befuellen ─────────────────────
+
+def _parse_enrich_response(raw: str) -> dict:
+    """Parst die KI-Antwort fuer den Enrich-Endpoint."""
+    import json, re
+    # JSON aus Markdown-Codeblöcken herausschneiden falls nötig
+    match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw)
+    cleaned = match.group(1) if match else raw.strip()
+    # Führendes/abschließendes Nicht-JSON entfernen
+    start = cleaned.find("{")
+    end = cleaned.rfind("}") + 1
+    if start >= 0 and end > start:
+        cleaned = cleaned[start:end]
+    return json.loads(cleaned)
+
+
+async def _run_enrich(video_id: str, job_id: str, req: EnrichRequest) -> None:
+    """Reichert slide_panels und render_hints fuer Szenen mit mehreren Bildern an."""
+    import json as _json
+    loop = asyncio.get_event_loop()
+    try:
+        if not _storyboard_svc.exists(video_id):
+            raise FileNotFoundError(f"Storyboard nicht gefunden fuer {video_id}")
+
+        storyboard = _storyboard_svc.load(video_id)
+        analyze_req = AnalyzeRequest(
+            video_id=video_id,
+            languages=req.languages,
+            ai_provider=req.ai_provider,
+            ai_model=req.ai_model,
+        )
+        provider = _get_provider(analyze_req)
+        frames_dir = settings.frames_dir / video_id
+        languages = req.languages or storyboard.languages or ["de"]
+
+        # Szenen bestimmen die angereichert werden sollen
+        target_ids = set(req.scene_ids) if req.scene_ids else None
+        scenes_to_enrich = [
+            (i, s) for i, s in enumerate(storyboard.scenes)
+            if len(s.image_group) > 1
+            and (target_ids is None or s.scene_id in target_ids)
+            and (target_ids is not None or not s.slide_panels)
+        ]
+
+        total = len(scenes_to_enrich)
+        if total == 0:
+            await _send(job_id, "completed", "enrich",
+                        "Alle Szenen bereits angereichert oder keine Szene mit mehreren Bildern.", 100,
+                        {"enriched": 0})
+            return
+
+        await _send(job_id, "progress", "enrich",
+                    f"Reichere {total} Szene(n) an...", 5)
+
+        enriched_count = 0
+        for step, (scene_idx, scene) in enumerate(scenes_to_enrich):
+            pct = 5 + int(90 * step / total)
+            await _send(job_id, "progress", "enrich",
+                        f"Szene {step+1}/{total}: {scene.scene_id} ({len(scene.image_group)} Bilder)...",
+                        pct)
+
+            prompt = build_enrich_prompt(scene, languages, frames_dir)
+            # Provider mit Text-only-Prompt aufrufen (kein Bild nötig – Texte liegen bereits vor)
+            try:
+                raw = await loop.run_in_executor(
+                    None,
+                    lambda p=prompt: provider.complete_text(p)
+                )
+            except Exception as call_exc:
+                await _send(job_id, "progress", "enrich",
+                            f"  [WARN] Szene {scene.scene_id}: API-Fehler ({call_exc}), übersprungen.", pct)
+                continue
+
+            try:
+                data = _parse_enrich_response(raw)
+            except Exception as parse_exc:
+                await _send(job_id, "progress", "enrich",
+                            f"  [WARN] Szene {scene.scene_id}: Parse-Fehler ({parse_exc}), übersprungen.", pct)
+                continue
+
+            # slide_panels befüllen
+            slide_panels_raw = data.get("slide_panels", {})
+            slide_panels: dict = {}
+            for lang, panels_raw in slide_panels_raw.items():
+                if isinstance(panels_raw, list):
+                    parsed_panels = []
+                    for p in panels_raw:
+                        if isinstance(p, dict):
+                            parsed_panels.append({
+                                "heading": str(p.get("heading", "")),
+                                "body":    str(p.get("body", "")),
+                                "speaker_notes": str(p.get("speaker_notes", "")),
+                            })
+                    # Länge an image_group anpassen (kürzen oder mit letztem Element auffüllen)
+                    n = len(scene.image_group)
+                    while len(parsed_panels) < n and parsed_panels:
+                        parsed_panels.append(parsed_panels[-1])
+                    slide_panels[lang] = parsed_panels[:n]
+
+            render_hints_raw = data.get("render_hints", {})
+            render_hints: dict = {}
+            if isinstance(render_hints_raw, dict):
+                if "transition" in render_hints_raw:
+                    render_hints["transition"] = str(render_hints_raw["transition"])
+                if "image_durations" in render_hints_raw:
+                    try:
+                        durations = [float(d) for d in render_hints_raw["image_durations"]]
+                        n = len(scene.image_group)
+                        while len(durations) < n and durations:
+                            durations.append(durations[-1])
+                        render_hints["image_durations"] = durations[:n]
+                    except (TypeError, ValueError):
+                        pass
+
+            storyboard.scenes[scene_idx].slide_panels = slide_panels
+            storyboard.scenes[scene_idx].render_hints = render_hints
+            enriched_count += 1
+
+        # Storyboard mit angereicherten Daten speichern
+        _storyboard_svc.save(storyboard)
+        await _send(job_id, "completed", "enrich",
+                    f"{enriched_count} Szene(n) angereichert.", 100,
+                    {"enriched": enriched_count, "storyboard": storyboard.model_dump()})
+
+    except Exception as exc:
+        if _is_throttle_error(exc):
+            pname = req.ai_provider.value if req.ai_provider else (settings.ai_providers[0] if settings.ai_providers else AiProvider.GEMINI.value)
+            mname = _get_effective_model(pname, req.ai_model)
+            await _send(job_id, "throttled", "enrich",
+                "Modell überlastet (503/429). Bitte wähle ein alternatives Modell.", 0,
+                {"alternatives": _throttle_alternatives(pname, mname)})
+        else:
+            await _send(job_id, "error", "enrich", str(exc))
+
+
+@router.post("/videos/{video_id}/storyboard/enrich", response_model=JobStartResponse)
+async def enrich_storyboard(
+    video_id: str,
+    req: EnrichRequest,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+) -> JobStartResponse:
+    """Reichert Szenen mit mehreren Bildern via KI an (slide_panels + render_hints)."""
+    job_id = str(uuid.uuid4())
+    job_store.create_queue(job_id)
+    background_tasks.add_task(_run_enrich, video_id, job_id, req)
+    return JobStartResponse(job_id=job_id, video_id=video_id, message="Anreicherung gestartet")

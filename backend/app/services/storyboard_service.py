@@ -11,7 +11,7 @@ from app.config import settings
 from app.models import Scene, StoryboardJson, TextPanel
 
 
-# ── Prompt ────────────────────────────────────────────────────────────────────
+# ── Prompts ────────────────────────────────────────────────────────────────────
 
 def build_analysis_prompt(languages: List[str], video_id: str, extra: str = "", num_frames: int = 0) -> str:
     lang_list = ", ".join(languages)
@@ -54,6 +54,63 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (kein Markdown, kein Erklaer
 }}
 
 video_id: {video_id}
+"""
+
+
+def build_enrich_prompt(scene: Scene, languages: List[str], frames_dir: Optional[Path] = None) -> str:
+    """Prompt fuer die KI um slide_panels und render_hints einer Szene zu befuellen."""
+    lang_list = ", ".join(languages)
+    n = len(scene.image_group)
+
+    texts_summary_lines = []
+    for lang in languages:
+        tp = scene.texts.get(lang)
+        if tp:
+            texts_summary_lines.append(
+                f"  Sprache '{lang}':\n"
+                f"    Ueberschrift: {tp.heading}\n"
+                f"    Beschreibung: {tp.body}\n"
+                f"    Sprecher-Notizen: {tp.speaker_notes}"
+            )
+    texts_summary = "\n".join(texts_summary_lines) if texts_summary_lines else "  (keine Texte vorhanden)"
+
+    image_list = "\n".join(f"  Bild {i+1}: {fn}" for i, fn in enumerate(scene.image_group))
+
+    return f"""Du bist ein Experte fuer Video-Tutorial-Erstellung.
+
+Eine Szene hat {n} Bild(er) und folgenden Gesamttext:
+{texts_summary}
+
+Bilder in dieser Szene (chronologisch):
+{image_list}
+
+Aufgabe:
+1. Teile body und speaker_notes thematisch auf die {n} Bilder auf – was wird bei welchem Bild erklaert?
+   Jedes Bild bekommt ein eigenes TextPanel mit heading, body und speaker_notes.
+   Das heading darf bei allen Bildern gleich sein (kurze Schritt-Bezeichnung).
+   Die speaker_notes MUESSEN zusammen den gesamten gesprochenen Text ergeben.
+2. Vergib jedem Bild eine sinnvolle Anzeigedauer in Sekunden (image_durations).
+   Richtwert: ~3-4 s fuer kurze Texte, ~6-8 s fuer laengere Erklaerungen.
+   Mindestens 2.0 Sekunden pro Bild.
+3. Waehle den Bilduebergang: "fade" fuer sanfte Uebergaenge, "cut" fuer harte Schnitte.
+
+Antworte NUR mit einem JSON-Objekt (kein Markdown):
+{{
+  "slide_panels": {{
+    "{languages[0]}": [
+      {{"heading": "...", "body": "...", "speaker_notes": "..."}},
+      ...
+    ]
+  }},
+  "render_hints": {{
+    "transition": "fade",
+    "image_durations": [5.0, 6.0]
+  }}
+}}
+
+Sprachen: {lang_list}
+Anzahl Bilder: {n}
+scene_id: {scene.scene_id}
 """
 
 
