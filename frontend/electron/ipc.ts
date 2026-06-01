@@ -97,11 +97,34 @@ export function registerAll(ipcMain: IpcMain): void {
   /** Schreibt die .env-Datei in den userData-Pfad.
    *  envValues ist ein Record<string, string> mit den Key-Value-Paaren. */
   ipcMain.handle("setup:write-env", async (_event, envValues: Record<string, string>) => {
-    const lines = Object.entries(envValues)
-      .map(([k, v]) => `${k}=${v}`)
-      .join("\n");
     fs.mkdirSync(path.dirname(USER_ENV_FILE), { recursive: true });
-    fs.writeFileSync(USER_ENV_FILE, lines + "\n", "utf8");
+
+    // Datei existiert → Kommentare und Struktur erhalten, nur Werte ersetzen
+    if (fs.existsSync(USER_ENV_FILE)) {
+      const existing = fs.readFileSync(USER_ENV_FILE, "utf8");
+      const updated = new Set<string>();
+      const outLines = existing.split(/\r?\n/).map((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) return line;
+        const idx = trimmed.indexOf("=");
+        if (idx < 0) return line;
+        const key = trimmed.slice(0, idx).trim();
+        if (key in envValues) {
+          updated.add(key);
+          return `${key}=${envValues[key]}`;
+        }
+        return line;
+      });
+      // Neue Keys anfügen die noch nicht in der Datei waren
+      for (const [k, v] of Object.entries(envValues)) {
+        if (!updated.has(k)) outLines.push(`${k}=${v}`);
+      }
+      fs.writeFileSync(USER_ENV_FILE, outLines.join("\n") + "\n", "utf8");
+    } else {
+      // Noch keine Datei → einfach schreiben
+      const lines = Object.entries(envValues).map(([k, v]) => `${k}=${v}`).join("\n");
+      fs.writeFileSync(USER_ENV_FILE, lines + "\n", "utf8");
+    }
     return USER_ENV_FILE;
   });
 

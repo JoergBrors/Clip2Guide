@@ -6,6 +6,7 @@ import FrameStack from "./components/FrameStack";
 import SceneEditor from "./components/SceneEditor";
 import RenderPanel from "./components/RenderPanel";
 import SetupWizard from "./components/SetupWizard";
+import SettingsPanel from "./components/SettingsPanel";
 import type { ImageInfo } from "./api/backendClient";
 import { api } from "./api/backendClient";
 
@@ -41,6 +42,7 @@ export default function App(): React.ReactElement {
   const [step, setStep] = useState<Step>("upload");
   const [project, setProject] = useState<ProjectState | null>(null);
   const [selectedFrames, setSelectedFrames] = useState<string[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Setup-Wizard: URL-Parameter ?setup=1 signalisiert, dass das Einrichtungsfenster aktiv ist.
   const isSetupMode = new URLSearchParams(window.location.search).get("setup") === "1";
@@ -122,6 +124,13 @@ export default function App(): React.ReactElement {
           ))}
         </nav>
         <button
+          style={styles.settingsBtn}
+          title="Einstellungen"
+          onClick={() => setSettingsOpen(true)}
+        >
+          ⚙
+        </button>
+        <button
           style={styles.uninstallBtn}
           title="Clip2Guide deinstallieren"
           onClick={() => {
@@ -134,6 +143,8 @@ export default function App(): React.ReactElement {
           Deinstallieren
         </button>
       </header>
+
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
 
       <main style={styles.main}>
         {step === "upload" && (
@@ -242,8 +253,18 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #1565c0",
     color: "#fff",
   },
-  uninstallBtn: {
+  settingsBtn: {
     marginLeft: "auto",
+    background: "transparent",
+    border: "1px solid #444",
+    color: "#aaa",
+    borderRadius: 6,
+    cursor: "pointer",
+    fontSize: 16,
+    padding: "2px 10px",
+    lineHeight: 1.4,
+  },
+  uninstallBtn: {
     padding: "4px 12px",
     background: "transparent",
     border: "1px solid #c62828",

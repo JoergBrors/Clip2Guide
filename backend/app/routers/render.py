@@ -249,13 +249,13 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
         )
 
         # Pro Sprache einen eigenen subprocess-Aufruf bauen → echter Parallelismus
-        lang_cmds: list[tuple[str, list[str]]] = []
+        lang_cmds: list[tuple[str, list[str], str]] = []
         for lang in req.languages:
-            cmd, _ = _render_svc.build_command(
+            cmd, out_dir = _render_svc.build_command(
                 video_id, [lang], storyboard_path,
                 fps=req.fps, quality=req.quality, tts_slow=req.tts_slow,
             )
-            lang_cmds.append((lang, cmd))
+            lang_cmds.append((lang, cmd, str(out_dir)))
 
         # Jeden Worker als run_in_executor starten → laeuft in Default-ThreadPool,
         # blockiert den asyncio Event-Loop nicht.
@@ -264,9 +264,9 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
                 None,
                 _render_lang_worker,
                 lang, cmd, job_id, loop, idx, total_langs,
-                str(settings.backend_root),
+                cwd,
             )
-            for idx, (lang, cmd) in enumerate(lang_cmds)
+            for idx, (lang, cmd, cwd) in enumerate(lang_cmds)
         ]
 
         # Alle Worker parallel abwarten; return_exceptions=True sammelt alle Fehler.

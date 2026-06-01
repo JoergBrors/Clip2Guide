@@ -55,7 +55,7 @@ class RenderService:
             text=True,
             encoding="utf-8",
             errors="replace",
-            cwd=str(settings.backend_root),
+            cwd=str(output_dir),
         )
         if result.returncode != 0:
             raise RuntimeError(

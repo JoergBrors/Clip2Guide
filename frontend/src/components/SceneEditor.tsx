@@ -17,6 +17,7 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
   const [analyzeProgress, setAnalyzeProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [languages, setLanguages] = useState<string[]>(DEFAULT_LANGUAGES);
+  const [langInput, setLangInput] = useState<string>(DEFAULT_LANGUAGES.join(","));
   const [activeScene, setActiveScene] = useState<number>(0);
   const [activeLang, setActiveLang] = useState<string>(DEFAULT_LANGUAGES[0]);
   const [showJson, setShowJson] = useState(false);
@@ -448,8 +449,13 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
               <input
                 id="lang-input"
                 type="text"
-                value={languages.join(",")}
-                onChange={(e) => setLanguages(e.target.value.split(",").map(l => l.trim()).filter(Boolean))}
+                value={langInput}
+                onChange={(e) => setLangInput(e.target.value)}
+                onBlur={() => {
+                  const parsed = langInput.split(",").map((l) => l.trim()).filter(Boolean);
+                  setLanguages(parsed);
+                  setLangInput(parsed.join(","));
+                }}
                 placeholder="de,en"
                 style={{ width: 160 }}
               />
