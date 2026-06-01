@@ -25,7 +25,7 @@ class RenderService:
         Gibt (cmd, output_dir) zurueck.
         Der Aufrufer startet den Subprocess und streamt die Ausgabe.
         """
-        script_path = settings.project_root / "backend" / "app" / "scripts" / "create_tutorial.py"
+        script_path = settings.backend_root / "app" / "scripts" / "create_tutorial.py"
         output_dir = settings.render_output_dir / video_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -55,7 +55,7 @@ class RenderService:
             text=True,
             encoding="utf-8",
             errors="replace",
-            cwd=str(settings.project_root / "backend"),
+            cwd=str(settings.backend_root),
         )
         if result.returncode != 0:
             raise RuntimeError(

@@ -264,7 +264,7 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
                 None,
                 _render_lang_worker,
                 lang, cmd, job_id, loop, idx, total_langs,
-                str(settings.project_root / "backend"),
+                str(settings.backend_root),
             )
             for idx, (lang, cmd) in enumerate(lang_cmds)
         ]

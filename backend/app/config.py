@@ -136,6 +136,13 @@ class Settings(BaseModel):
         return _PROJECT_ROOT
 
     @property
+    def backend_root(self) -> Path:
+        """Absoluter Pfad zum backend/-Verzeichnis (relativ zu config.py).
+        Funktioniert im Dev-Modus und im paketierten Betrieb (app.asar.unpacked),
+        unabhaengig von PROJECT_ROOT / USER_LOCAL_DIR."""
+        return Path(__file__).resolve().parent.parent
+
+    @property
     def ai_providers(self) -> list[str]:
         """Liste aller in AI_PROVIDER konfigurierten Provider (kommagetrennt)."""
         return [p.strip() for p in self.ai_provider.split(",") if p.strip()]
