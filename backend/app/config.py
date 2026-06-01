@@ -93,11 +93,16 @@ class Settings(BaseModel):
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1")
-    # Azure OpenAI
+    # Azure OpenAI (openai.azure.com)
     azure_openai_api_key: str = os.getenv("AZURE_OPENAI_API_KEY", "")
     azure_openai_endpoint: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     azure_openai_deployment: str = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1-mini")
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+    # Azure Cognitive Services (cognitiveservices.azure.com)
+    azure_cognitive_api_key: str = os.getenv("AZURE_COGNITIVE_API_KEY", "")
+    azure_cognitive_endpoint: str = os.getenv("AZURE_COGNITIVE_ENDPOINT", "")
+    azure_cognitive_deployment: str = os.getenv("AZURE_COGNITIVE_DEPLOYMENT", "gpt-5-mini")
+    azure_cognitive_api_version: str = os.getenv("AZURE_COGNITIVE_API_VERSION", "2025-04-01-preview")
 
     # Tools
     ffmpeg_path: Path = _resolve("FFMPEG_PATH", "./tools/ffmpeg/bin/ffmpeg.exe")

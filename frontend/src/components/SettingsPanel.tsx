@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 
 const ALL_PROVIDERS = [
-  { key: "gemini",       label: "Google Gemini" },
-  { key: "openai",       label: "OpenAI" },
-  { key: "azure_openai", label: "Azure OpenAI" },
+  { key: "gemini",            label: "Google Gemini" },
+  { key: "openai",            label: "OpenAI" },
+  { key: "azure_openai",      label: "Azure OpenAI" },
+  { key: "azure_cognitive",   label: "Azure Cognitive Services" },
 ];
 
 interface Field {
@@ -29,7 +30,7 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
     ],
   },
   {
-    title: "Azure OpenAI",
+    title: "Azure OpenAI (openai.azure.com)",
     fields: [
       { key: "AZURE_OPENAI_API_KEY", label: "API Key", type: "password" },
       {
@@ -39,6 +40,19 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
       },
       { key: "AZURE_OPENAI_DEPLOYMENT", label: "Deployment Name", placeholder: "gpt-4.1-mini" },
       { key: "AZURE_OPENAI_API_VERSION", label: "API Version", placeholder: "2025-01-01-preview" },
+    ],
+  },
+  {
+    title: "Azure Cognitive Services (cognitiveservices.azure.com)",
+    fields: [
+      { key: "AZURE_COGNITIVE_API_KEY", label: "API Key", type: "password" },
+      {
+        key: "AZURE_COGNITIVE_ENDPOINT",
+        label: "Endpoint",
+        placeholder: "https://<resource>.cognitiveservices.azure.com/",
+      },
+      { key: "AZURE_COGNITIVE_DEPLOYMENT", label: "Deployment Name", placeholder: "gpt-5-mini" },
+      { key: "AZURE_COGNITIVE_API_VERSION", label: "API Version", placeholder: "2025-04-01-preview" },
     ],
   },
   {

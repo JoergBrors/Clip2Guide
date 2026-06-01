@@ -21,6 +21,7 @@ class AiProvider(str, Enum):
     GEMINI = "gemini"
     OPENAI = "openai"
     AZURE_OPENAI = "azure_openai"
+    AZURE_COGNITIVE = "azure_cognitive"
 
 
 # ── Storyboard / Szenenstruktur ───────────────────────────────────────────────

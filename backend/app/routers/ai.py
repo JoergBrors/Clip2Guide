@@ -45,6 +45,13 @@ AZURE_OPENAI_VISION_MODELS: List[str] = [
     "gpt-4o-mini",
 ]
 
+AZURE_COGNITIVE_VISION_MODELS: List[str] = [
+    "gpt-5-mini",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-4o",
+]
+
 
 def _list_gemini_models() -> List[str]:
     """Listet alle Gemini-Modelle auf, die generateContent unterstuetzen."""
@@ -69,6 +76,7 @@ async def list_providers() -> dict:
         AiProvider.GEMINI.value: "Google Gemini",
         AiProvider.OPENAI.value: "OpenAI",
         AiProvider.AZURE_OPENAI.value: "Azure OpenAI",
+        AiProvider.AZURE_COGNITIVE.value: "Azure Cognitive Services",
     }
     result = []
     for p in settings.ai_providers:
@@ -105,6 +113,16 @@ async def list_models(provider: str = Query(default="gemini")) -> dict:
             "models": AZURE_OPENAI_VISION_MODELS,
             "default": settings.azure_openai_deployment,
         }
+    elif provider == AiProvider.AZURE_COGNITIVE.value:
+        if not settings.azure_cognitive_api_key:
+            raise HTTPException(status_code=400, detail="AZURE_COGNITIVE_API_KEY ist nicht gesetzt.")
+        if not settings.azure_cognitive_endpoint:
+            raise HTTPException(status_code=400, detail="AZURE_COGNITIVE_ENDPOINT ist nicht gesetzt.")
+        return {
+            "provider": provider,
+            "models": AZURE_COGNITIVE_VISION_MODELS,
+            "default": settings.azure_cognitive_deployment,
+        }
     else:
         raise HTTPException(status_code=400, detail=f"Unbekannter Provider: {provider}")
 
@@ -123,6 +141,9 @@ def _get_provider(req: AnalyzeRequest):
     elif provider_name == AiProvider.AZURE_OPENAI.value:
         from app.services.azure_openai_provider import AzureOpenAiProvider
         return AzureOpenAiProvider(model=model)
+    elif provider_name == AiProvider.AZURE_COGNITIVE.value:
+        from app.services.azure_cognitive_provider import AzureCognitiveProvider
+        return AzureCognitiveProvider(model=model)
     else:
         raise ValueError(f"Unbekannter AI-Provider: {provider_name}")
 
@@ -146,6 +167,8 @@ def _get_effective_model(provider_name: str, model_override: str | None) -> str:
         return settings.openai_model
     elif provider_name == AiProvider.AZURE_OPENAI.value:
         return settings.azure_openai_deployment
+    elif provider_name == AiProvider.AZURE_COGNITIVE.value:
+        return settings.azure_cognitive_deployment
     return "unknown"
 
 
@@ -156,11 +179,13 @@ def _throttle_alternatives(current_provider: str, current_model: str) -> list[di
         AiProvider.GEMINI.value: "Google Gemini",
         AiProvider.OPENAI.value: "OpenAI",
         AiProvider.AZURE_OPENAI.value: "Azure OpenAI",
+        AiProvider.AZURE_COGNITIVE.value: "Azure Cognitive Services",
     }
     same_provider_models: dict[str, list[str]] = {
         AiProvider.GEMINI.value: ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash"],
         AiProvider.OPENAI.value: OPENAI_VISION_MODELS,
         AiProvider.AZURE_OPENAI.value: AZURE_OPENAI_VISION_MODELS,
+        AiProvider.AZURE_COGNITIVE.value: AZURE_COGNITIVE_VISION_MODELS,
     }
     # Andere Modelle desselben Providers
     for m in same_provider_models.get(current_provider, []):
@@ -175,6 +200,7 @@ def _throttle_alternatives(current_provider: str, current_model: str) -> list[di
         AiProvider.GEMINI.value: settings.gemini_model,
         AiProvider.OPENAI.value: settings.openai_model,
         AiProvider.AZURE_OPENAI.value: settings.azure_openai_deployment,
+        AiProvider.AZURE_COGNITIVE.value: settings.azure_cognitive_deployment,
     }
     for p in settings.ai_providers:
         if p != current_provider and p in provider_defaults:
