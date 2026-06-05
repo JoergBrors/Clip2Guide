@@ -214,6 +214,15 @@ export default function DebugPanel({ onClose }: Props): React.ReactElement {
                 {row("Pfad", info.paths.ffmpegExe)}
                 {info.paths.ffmpegExists && row("Architektur", info.ffmpeg.arch,
                   info.app.osPlatform === "darwin" && !info.ffmpeg.arch.includes("arm64"))}
+                {info.paths.ffmpegExists && info.app.osPlatform === "darwin"
+                  && !info.ffmpeg.arch.includes("arm64") && (
+                  <div style={s.diagHint}>
+                    ⚠ FFmpeg läuft als x86_64 (Rosetta) statt arm64 – führt zu Kompatibilitätsproblemen.<br />
+                    Lösung: FFmpeg löschen und initial.sh erneut ausführen:<br />
+                    <code>rm -rf "{info.paths.ffmpegExe.replace(/\/bin\/ffmpeg$/, "")}"</code><br />
+                    Danach im Setup-Wizard „Einrichtung erneut ausführen" wählen.
+                  </div>
+                )}
               </div>
 
               {/* Pfade */}

@@ -225,14 +225,22 @@ if [[ "$SKIP_FFMPEG" == "false" ]]; then
   fi
 
   if [[ "$NEED_DOWNLOAD" == "true" ]]; then
-    echo "Lade FFmpeg von evermeet.cx..."
+    # Architektur-explizite Download-URLs:
+    # - arm64 (Apple Silicon): martin-riedl.de statische Builds, expliziter arm64-Pfad
+    # - x86_64 (Intel):        evermeet.cx als Fallback
+    if [[ "$ARCH" == "arm64" ]]; then
+      FFMPEG_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip"
+      FFPROBE_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip"
+      echo "Lade FFmpeg (arm64-nativ) von ffmpeg.martin-riedl.de..."
+    else
+      FFMPEG_URL="https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip"
+      FFPROBE_URL="https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip"
+      echo "Lade FFmpeg (x86_64) von evermeet.cx..."
+    fi
 
-    # evermeet.cx bietet statische FFmpeg-Builds fuer macOS (keine ffplay benoetigt)
-    FFMPEG_URL="https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip"
-    FFPROBE_URL="https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip"
-
-    curl -L --fail -o "$TOOLS_DIR/ffmpeg.zip"   "$FFMPEG_URL"
-    curl -L --fail -o "$TOOLS_DIR/ffprobe.zip"  "$FFPROBE_URL"
+    mkdir -p "$FFMPEG_BIN"
+    curl -L --fail -o "$TOOLS_DIR/ffmpeg.zip"  "$FFMPEG_URL"
+    curl -L --fail -o "$TOOLS_DIR/ffprobe.zip" "$FFPROBE_URL"
 
     unzip -o "$TOOLS_DIR/ffmpeg.zip"  -d "$FFMPEG_BIN"
     unzip -o "$TOOLS_DIR/ffprobe.zip" -d "$FFMPEG_BIN"
@@ -240,18 +248,27 @@ if [[ "$SKIP_FFMPEG" == "false" ]]; then
     rm -f "$TOOLS_DIR/ffmpeg.zip" "$TOOLS_DIR/ffprobe.zip"
     chmod +x "$FFMPEG_EXE" "$FFPROBE_EXE"
 
-    # Architektur der heruntergeladenen Binary prüfen
+    # Architektur der heruntergeladenen Binary prüfen und bei Mismatch hart abbrechen
     FFMPEG_FILE_ARCH=$(file "$FFMPEG_EXE" 2>/dev/null || echo "")
     if [[ "$ARCH" == "arm64" && "$FFMPEG_FILE_ARCH" != *"arm64"* ]]; then
-      warn "FFmpeg-Binary ist NICHT arm64: $FFMPEG_FILE_ARCH"
-      warn "evermeet.cx liefert immer die native Architektur – prüfe ob curl Rosetta nutzt."
-    else
-      ok "FFmpeg-Architektur: arm64"
+      rm -f "$FFMPEG_EXE" "$FFPROBE_EXE"
+      fail "FFmpeg-Binary ist NICHT arm64 (war: $FFMPEG_FILE_ARCH). Dateien gelöscht. Bitte erneut ausführen oder FFmpeg manuell als arm64-Binary nach $FFMPEG_BIN kopieren."
+      exit 1
     fi
-
-    ok "FFmpeg installiert: $FFMPEG_BIN"
+    ok "FFmpeg installiert ($ARCH): $FFMPEG_BIN"
   else
-    ok "FFmpeg bereits vorhanden"
+    # Vorhandenes FFmpeg auf korrekte Architektur prüfen
+    FFMPEG_FILE_ARCH=$(file "$FFMPEG_EXE" 2>/dev/null || echo "")
+    if [[ "$ARCH" == "arm64" && "$FFMPEG_FILE_ARCH" != *"arm64"* ]]; then
+      warn "Vorhandenes FFmpeg ist NICHT arm64 ($FFMPEG_FILE_ARCH) – erzwinge Neu-Download."
+      rm -f "$FFMPEG_EXE" "$FFPROBE_EXE"
+      FORCE_FFMPEG=true
+      # Rekursiv neu starten ist nicht nötig – beim nächsten initial.sh-Aufruf wird es geladen.
+      # Klare Anweisung ausgeben:
+      fail "Bitte initial.sh erneut ausführen (--force-ffmpeg), um arm64-FFmpeg zu laden."
+      exit 1
+    fi
+    ok "FFmpeg bereits vorhanden ($ARCH)"
   fi
 
   # IMAGEIO_FFMPEG_EXE fuer imageio-ffmpeg setzen (Shell-Session)
