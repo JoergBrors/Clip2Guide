@@ -302,26 +302,55 @@ class ManualRenderService:
             segments = manual_segments(scene, lang, max(len(image_group), 1))
 
             for img_idx, filename in enumerate(image_group or [""]):
-                table = doc.add_table(rows=1, cols=2)
+                if img_idx > 0:
+                    doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+
+                # Breite des nutzbaren Bereichs: A5 quer 210mm - 2cm Ränder = 188mm
+                PAGE_W_CM = 18.8
+
+                table = doc.add_table(rows=2, cols=1)
                 table.alignment = WD_TABLE_ALIGNMENT.CENTER
                 table.autofit = False
                 table.style = "Table Grid"
-                row = table.rows[0]
-                img_cell = row.cells[0]
-                panel_cell = row.cells[1]
-                set_cell_width(img_cell, 8.2)
-                set_cell_width(panel_cell, 9.8)
+
+                img_cell = table.rows[0].cells[0]
+                panel_cell = table.rows[1].cells[0]
+
+                for cell in (img_cell, panel_cell):
+                    set_cell_width(cell, PAGE_W_CM)
+
                 img_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
                 panel_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
                 shade_cell(img_cell, "F3F6FA")
                 shade_cell(panel_cell, "FFFFFF")
+
                 img_path = frames_dir / filename
                 if filename and img_path.exists():
                     safe_img_path = prepare_docx_image(img_path, lang, scene_idx, img_idx + 1)
+                    try:
+                        from PIL import Image as _PILImage
+                        with _PILImage.open(safe_img_path) as _pil:
+                            orig_w, orig_h = _pil.size
+                    except Exception:
+                        orig_w, orig_h = 1, 1
+
+                    # Bild so skalieren dass es maximal PAGE_W_CM breit und max 9cm hoch ist
+                    max_w_cm = PAGE_W_CM - 0.4
+                    max_h_cm = 9.0
+                    if orig_w / max(orig_h, 1) >= max_w_cm / max_h_cm:
+                        img_w = Cm(max_w_cm)
+                        img_h = None
+                    else:
+                        img_h = Cm(max_h_cm)
+                        img_w = None
+
                     add_label(img_cell.paragraphs[0], f"Abbildung {scene_idx}.{img_idx + 1}")
                     img_cell.paragraphs[0].add_run("\n")
                     run = img_cell.paragraphs[0].add_run()
-                    run.add_picture(str(safe_img_path), width=Cm(7.8))
+                    if img_w:
+                        run.add_picture(str(safe_img_path), width=img_w)
+                    else:
+                        run.add_picture(str(safe_img_path), height=img_h)
                 else:
                     img_cell.text = filename or "(kein Bild)"
 
