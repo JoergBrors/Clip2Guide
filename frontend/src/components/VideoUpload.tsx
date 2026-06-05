@@ -6,7 +6,7 @@ type UploadMode = "video" | "images";
 
 interface LocalImage {
   file: File;
-  dataUrl: string;
+  dataUrl: string | null;  // null für HEIC/HEIF (Browser kann kein HEIC rendern)
 }
 
 interface Props {
@@ -79,6 +79,10 @@ export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImp
     const ext = f.name.slice(f.name.lastIndexOf(".")).toLowerCase();
     return _HEIC_EXTS.has(ext);
   }
+  function _isHeic(f: File): boolean {
+    const ext = f.name.slice(f.name.lastIndexOf(".")).toLowerCase();
+    return _HEIC_EXTS.has(ext) || f.type === "image/heic" || f.type === "image/heif";
+  }
 
   function addFiles(files: FileList | File[]) {
     const arr = Array.from(files).filter(_isImageFile);
@@ -87,6 +91,11 @@ export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImp
       arr.map(
         (file) =>
           new Promise<LocalImage>((resolve) => {
+            // HEIC kann Browser nicht rendern → Placeholder statt DataURL
+            if (_isHeic(file)) {
+              resolve({ file, dataUrl: null });
+              return;
+            }
             const reader = new FileReader();
             reader.onload = (ev) =>
               resolve({ file, dataUrl: ev.target?.result as string });
@@ -316,7 +325,30 @@ export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImp
             >
               {localImages.map((img, idx) => (
                 <div key={idx} style={{ position: "relative" }}>
-                  <ImageHoverZoom src={img.dataUrl} alt={img.file.name} aspectRatio="4/3" />
+                  {img.dataUrl ? (
+                    <ImageHoverZoom src={img.dataUrl} alt={img.file.name} aspectRatio="4/3" />
+                  ) : (
+                    <div style={{
+                      aspectRatio: "4/3",
+                      background: "#1a2540",
+                      border: "1px solid #2a3a5c",
+                      borderRadius: 6,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 4,
+                      padding: 6,
+                    }}>
+                      <span style={{ fontSize: 28 }}>🖼️</span>
+                      <span style={{ fontSize: 9, color: "#90caf9", textAlign: "center", wordBreak: "break-all" }}>
+                        HEIC
+                      </span>
+                      <span style={{ fontSize: 9, color: "#666", textAlign: "center" }}>
+                        {(img.file.size / 1024).toFixed(0)} KB
+                      </span>
+                    </div>
+                  )}
                   <button
                     aria-label={`${img.file.name} entfernen`}
                     onClick={(e) => {
