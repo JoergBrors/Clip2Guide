@@ -90,44 +90,52 @@ ok "Verzeichnisstruktur angelegt"
 section "Python Umgebung"
 
 # ── Python-Binary auflösen ────────────────────────────────────────────────────
-# Priorität: python3.13 (Homebrew arm64) → python3 (System-Fallback)
-# Das macOS-System-Python ist 3.9 und unterstützt u.a. keine
-# TemporaryDirectory(ignore_cleanup_errors=True) – daher explizit 3.13 erzwingen.
-BREW_PREFIX=""
-if command -v brew &>/dev/null; then
-  BREW_PREFIX="$(brew --prefix 2>/dev/null || echo "")"
-fi
-BREW_PYTHON_BIN="${BREW_PREFIX}/opt/python@${PYTHON_VERSION}/bin"
-# Binary-Namen: python3.13, dann python3
-PYTHON3_CMD=""
-for candidate in \
-    "${BREW_PYTHON_BIN}/python${PYTHON_VERSION}" \
-    "${BREW_PYTHON_BIN}/python3" \
-    "python${PYTHON_VERSION}" \
-    "python3"; do
-  if command -v "$candidate" &>/dev/null || [[ -f "$candidate" ]]; then
-    PYTHON3_CMD="$candidate"
-    break
-  fi
-done
-if [[ -z "$PYTHON3_CMD" ]]; then
-  echo "[ERROR] Kein Python gefunden."
-  echo "  Bitte installieren: brew install python@${PYTHON_VERSION}"
-  exit 1
-fi
+# Electron startet das Skript ohne den Homebrew-PATH (/opt/homebrew/bin fehlt).
+# Daher werden bekannte Homebrew-Pfade hart kodiert geprüft – BEVOR PATH-Einträge.
+# Priorität: Homebrew arm64 → Homebrew Intel → PATH-Eintrag python3.X → python3
+# System-Python (/usr/bin/python3 = 3.9) wird nur als letzter Fallback akzeptiert,
+# dann aber sofort mit einem Versions-Fehler abgebrochen.
 
-# Version und Architektur des gewählten Python prüfen
+_find_python() {
+  local ver="$1"
+  local candidates=(
+    "/opt/homebrew/opt/python@${ver}/bin/python${ver}"   # Homebrew arm64
+    "/opt/homebrew/opt/python@${ver}/bin/python3"
+    "/opt/homebrew/bin/python${ver}"
+    "/usr/local/opt/python@${ver}/bin/python${ver}"      # Homebrew Intel
+    "/usr/local/opt/python@${ver}/bin/python3"
+    "/usr/local/bin/python${ver}"
+    "python${ver}"                                        # PATH-Eintrag
+    "python3"                                             # PATH-Eintrag (Fallback)
+  )
+  for c in "${candidates[@]}"; do
+    if [[ -f "$c" ]] && [[ -x "$c" ]]; then
+      echo "$c"; return 0
+    elif [[ "${c}" != /* ]] && command -v "$c" &>/dev/null; then
+      command -v "$c"; return 0
+    fi
+  done
+  return 1
+}
+
+PYTHON3_CMD="$(_find_python "$PYTHON_VERSION")" || {
+  echo "[ERROR] Kein Python ${PYTHON_VERSION} gefunden."
+  echo "  Bitte installieren:"
+  echo "    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+  echo "    brew install python@${PYTHON_VERSION}"
+  exit 1
+}
+
+# Version des gefundenen Python prüfen
 PYTHON_FOUND=$("$PYTHON3_CMD" --version 2>&1)
 PYTHON_MINOR=$("$PYTHON3_CMD" -c "import sys; print(sys.version_info.minor)" 2>/dev/null || echo "0")
-ok "Python gefunden: $PYTHON_FOUND ($PYTHON3_CMD)"
+ok "Python gefunden: $PYTHON_FOUND  →  $PYTHON3_CMD"
 
 if [[ "$PYTHON_MINOR" -lt 10 ]]; then
-  echo "[ERROR] Python ${PYTHON_FOUND} ist zu alt – mindestens 3.10 erforderlich."
-  echo "  Bitte installieren: brew install python@${PYTHON_VERSION}"
-  echo "  Dann Skript erneut ausführen."
-  if ! command -v brew &>/dev/null; then
-    echo "  Homebrew fehlt: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-  fi
+  echo "[ERROR] ${PYTHON_FOUND} ist zu alt – mindestens 3.10 erforderlich."
+  echo "  Homebrew-Python installieren:"
+  echo "    brew install python@${PYTHON_VERSION}"
+  echo "  Danach Skript erneut ausführen."
   exit 1
 fi
 
@@ -135,14 +143,16 @@ if [[ "$SKIP_PYTHON" == "false" ]]; then
   # Architektur-Check: auf Apple Silicon muss python arm64 sein
   PYTHON_ARCH=$("$PYTHON3_CMD" -c "import platform; print(platform.machine())" 2>/dev/null || echo "unknown")
   if [[ "$ARCH" == "arm64" && "$PYTHON_ARCH" != "arm64" ]]; then
-    warn "Python läuft als '$PYTHON_ARCH' statt 'arm64' – Homebrew-Python wird benötigt."
-    warn "  brew install python@${PYTHON_VERSION}"
-    BREW_CANDIDATE="${BREW_PYTHON_BIN}/python${PYTHON_VERSION}"
-    if [[ -f "$BREW_CANDIDATE" ]]; then
-      warn "Homebrew-Python gefunden: $BREW_CANDIDATE – verwende dieses."
-      PYTHON3_CMD="$BREW_CANDIDATE"
+    warn "Python läuft als '$PYTHON_ARCH' statt 'arm64'."
+    # Homebrew arm64 explizit nochmals suchen
+    BREW_NATIVE="/opt/homebrew/opt/python@${PYTHON_VERSION}/bin/python${PYTHON_VERSION}"
+    if [[ -f "$BREW_NATIVE" ]] && [[ -x "$BREW_NATIVE" ]]; then
+      warn "Verwende Homebrew arm64: $BREW_NATIVE"
+      PYTHON3_CMD="$BREW_NATIVE"
     else
-      warn "Homebrew-Python nicht gefunden – bitte manuell installieren."
+      echo "[ERROR] Kein arm64-Python gefunden."
+      echo "  brew install python@${PYTHON_VERSION}"
+      exit 1
     fi
   else
     ok "Python-Architektur: $PYTHON_ARCH"
