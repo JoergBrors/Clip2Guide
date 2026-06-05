@@ -150,7 +150,7 @@ Das Projekt verwendet **zwei separate** `tsconfig.json`-Dateien.
 | `google-genai` | Gemini-API-Client |
 | `openai` | OpenAI- und Azure-OpenAI-Client |
 | `moviepy` | Video-Komposition (≥ 2.x) |
-| `Pillow` | Bild-Manipulation (Text-Panels) |
+| `Pillow` | Bild-Manipulation (Text-Panels) und DOCX-kompatible Frame-Aufbereitung |
 | `gTTS` | Text-to-Speech (Google TTS) |
 | `opencv-python` | Pause-Erkennung (pause_detector.py) |
 | `httpx` | Async HTTP (intern genutzt) |
@@ -185,6 +185,7 @@ Das Projekt verwendet **zwei separate** `tsconfig.json`-Dateien.
 - Import: `POST /api/projects/import` mit ZIP-Datei und `restore_mode=new_id|overwrite`
 - Der Import validiert Manifest, Pfade und SHA256-Pruefsummen und schreibt nur in erwartete Workspace-Verzeichnisse.
 - Die UI bietet Restore im Upload-Schritt und im Rendering-Schritt an; nach erfolgreichem Import springt sie direkt zum Storyboard.
+- Beim anschliessenden DOCX-Handbuch-Rendering werden restaurierte Frames vor dem Einfuegen in Word mit Pillow validiert und unter `workspace/tmp/manual-docx-images/` als kompatible JPEGs vorbereitet.
 
 ### Frame-Editor erweitern
 
@@ -250,7 +251,7 @@ Der `workspace/`-Ordner enthält alle Laufzeit-Daten. Persistente Bereiche
 (`uploads`, `frames`, `ai-output`, `output`, `cut`, `normalized`) werden **nicht**
 automatisch bereinigt, da der Benutzer auf frühere Ergebnisse zugreifen können soll.
 `workspace/tmp/` wird beim Backend-Start automatisch geleert, damit alte Export- oder
-Auto-Editor-Fragmente keine neuen Läufe beeinflussen.
+Auto-Editor- oder DOCX-Bildfragmente keine neuen Läufe beeinflussen.
 
 ### Backend-Neustart im Dev-Modus
 

@@ -678,10 +678,11 @@ USER_LOCAL_DIR: string
 - `RenderRequest.output_formats` steuert die Ausgaben: `["video"]`, `["manual"]` oder `["video", "manual"]`. Video bleibt der Default und nutzt weiterhin `create_tutorial.py`.
 - `RenderRequest.handbook_optimize`, `ai_provider` und `ai_model` aktivieren optional eine KI-Segmentierung fuer das DOCX-Handbuch. Die KI darf keine Inhalte umschreiben; sie darf vorhandenen `body` als Bild-Erklaerung und vorhandene `speaker_notes` als Textbausteine nur auf die Bilder derselben Szene verteilen und Uebergaenge minimal glaetten. `ManualRenderService` validiert Szenenanzahl, `scene_id` und `image_group`.
 - `backend/app/services/manual_render_service.py` erzeugt pro Sprache `workspace/output/{video_id}/manual_{lang}.docx` im A5-Querformat mit Calibri 10 pt und 1 cm Raendern. Bilder bleiben eingebettete Bilder, Texte bleiben bearbeitbarer Word-Text. Szenen werden als offizielle Handbuchabschnitte mit Bild-/Texttabellen formatiert; `body` und `speaker_notes` werden pro Szene verlustfrei auf die Bilder verteilt statt als separater Gesamtblock ausgegeben.
+- Vor dem Einfuegen in Word validiert `ManualRenderService._write_docx()` jedes Frame mit Pillow und schreibt eine DOCX-kompatible JPEG-Arbeitsdatei unter `workspace/tmp/manual-docx-images/{video_id}/{lang}/`. Dadurch funktionieren auch wiederhergestellte oder bearbeitete Frames, deren Dateiendung nicht verlaesslich zum Bildinhalt passt.
 - Bei aktivierter KI-Optimierung wird zusaetzlich `workspace/ai-output/{video_id}/manual_storyboard_{lang}.json` gespeichert. Das originale `storyboard.json` wird fuer Handbuch-only-Rendering nicht ueberschrieben.
 - `GET /api/videos/{video_id}/manual/{filename}` liefert fertige DOCX-Dateien aus `workspace/output/{video_id}`.
 - `frontend/src/components/RenderPanel.tsx` bietet Ausgabeformat-Auswahl, Handbuch-KI-Optimierung sowie Provider-/Modellauswahl analog zur Storyboard-Analyse.
-- Beim Handbuch-KI-Rendering sendet `_render_manual_worker()` zusaetzlich `debug`-SSE-Events fuer Prompt und KI-Antwort, damit lange `complete_text()`-Aufrufe im Debug-Log sichtbar sind.
+- Beim Handbuch-KI-Rendering sendet `_render_manual_worker()` zusaetzlich `debug`-SSE-Events fuer Prompt und KI-Antwort, damit lange `complete_text()`-Aufrufe im Debug-Log sichtbar sind. Render-Exceptions werden mit Fehlerklasse und Sprache geloggt, damit die UI nie einen leeren `Fehler:`-Text anzeigen muss.
 
 ### Startup-Cache-Bereinigung
 

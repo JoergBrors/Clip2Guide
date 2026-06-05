@@ -478,6 +478,8 @@ Vor dem Render werden die Szenen-Dauern automatisch neu berechnet:
 SSE-Events (über `/api/jobs/{job_id}/events`):
 - `progress`: 10–100 %, aus `stdout` von `create_tutorial.py` (Regex-Parsing)
 - `log`: Roh-Stdout-/Stderr-Zeilen
+- `debug`: Prompt und KI-Antwort bei aktivierter Handbuch-Optimierung
+- `error`: Nicht-leere Fehlermeldung; beim Handbuch-Rendering enthält sie die betroffene Sprache
 - `completed`:
 ```json
 {
@@ -506,6 +508,11 @@ Fertige Tutorial-Video-Datei herunterladen.
 ### `GET /api/videos/{video_id}/manual/{filename}`
 
 Fertige DOCX-Handbuch-Datei herunterladen.
+
+Beim DOCX-Aufbau werden Frames vor dem Einfügen in Word validiert und als
+DOCX-kompatible JPEG-Arbeitsdateien unter `workspace/tmp/manual-docx-images/`
+geschrieben. Dadurch funktionieren auch restaurierte oder bearbeitete Frames,
+deren Dateiendung nicht zuverlässig zum Bildinhalt passt.
 
 **Path-Parameter:**
 - `video_id` – UUID des Videos

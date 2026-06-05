@@ -7,6 +7,7 @@ import asyncio
 import re
 import subprocess
 import threading
+import traceback
 import uuid
 from pathlib import Path
 
@@ -31,6 +32,11 @@ async def _send(job_id: str, type_: str, step: str, message: str, percent: int =
         "type": type_, "step": step, "message": message,
         "percent": percent, **({"data": data} if data else {}),
     })
+
+
+def _format_exception(exc: BaseException) -> str:
+    message = str(exc).strip()
+    return message or type(exc).__name__
 
 
 # ── Regex-Muster fuer Fortschritts-Parsing ─────────────────────────────────────
@@ -231,16 +237,21 @@ def _render_manual_worker(
     def debug_prompt(step: str, content: str) -> None:
         push("debug", step, f"[{lang}] {content}", base + 20, {"language": lang})
 
-    out_path = _manual_svc.render_manual(
-        video_id,
-        lang,
-        optimize=req.handbook_optimize,
-        ai_provider=req.ai_provider,
-        ai_model=req.ai_model,
-        debug_callback=debug_prompt,
-    )
-    push("log", "render", f"[{lang}] Handbuch gespeichert: {out_path}", base + 80)
-    return str(out_path)
+    try:
+        out_path = _manual_svc.render_manual(
+            video_id,
+            lang,
+            optimize=req.handbook_optimize,
+            ai_provider=req.ai_provider,
+            ai_model=req.ai_model,
+            debug_callback=debug_prompt,
+        )
+        push("log", "render", f"[{lang}] Handbuch gespeichert: {out_path}", base + 80)
+        return str(out_path)
+    except Exception as exc:
+        detail = _format_exception(exc)
+        push("log", "render", f"[{lang}] Handbuch-Fehler: {detail}\n{traceback.format_exc()}", base + 80)
+        raise RuntimeError(f"[{lang}] Handbuch-Rendering fehlgeschlagen: {detail}") from exc
 
 
 # ── Asynchroner Orchestrator ───────────────────────────────────────────────────
@@ -334,7 +345,7 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
         # Alle Worker parallel abwarten; return_exceptions=True sammelt alle Fehler.
         results = await asyncio.gather(*worker_tasks, return_exceptions=True)
 
-        errors = [str(r) for r in results if isinstance(r, Exception)]
+        errors = [_format_exception(r) for r in results if isinstance(r, Exception)]
         if errors:
             raise RuntimeError("\n".join(errors))
 
@@ -347,7 +358,7 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
         )
 
     except Exception as exc:
-        await _send(job_id, "error", "render", str(exc))
+        await _send(job_id, "error", "render", _format_exception(exc))
 
 
 @router.post("/videos/{video_id}/render", response_model=JobStartResponse)

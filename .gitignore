@@ -32,6 +32,7 @@ workspace/ai-output/
 workspace/output/
 workspace/jobs/
 workspace/logs/
+workspace/tmp/
 
 # ── Electron Build ────────────────────────────────────────────────────────────
 release/
@@ -58,3 +59,4 @@ localstuff/
 tools/
 *.mp4
 tutorial_deTEMP_MPY_wvf_snd.mp4
+

@@ -242,6 +242,30 @@ class ManualRenderService:
             speaker_segments = distribute_text(split_sentences(text.speaker_notes or text.body), image_count)
             return list(zip(body_segments, speaker_segments))
 
+        def prepare_docx_image(image_path: Path, language: str, scene_idx: int, img_idx: int) -> Path:
+            """Stellt sicher, dass python-docx ein restoriertes Frame sicher lesen kann."""
+            try:
+                from PIL import Image as PILImage
+            except ImportError as exc:
+                raise RuntimeError("Pillow ist fuer die Handbuch-Bildvalidierung nicht installiert.") from exc
+
+            try:
+                with PILImage.open(image_path) as img:
+                    img.verify()
+            except Exception as exc:
+                raise RuntimeError(f"Frame ist kein gueltiges Bild fuer das Handbuch: {image_path.name}") from exc
+
+            try:
+                with PILImage.open(image_path) as img:
+                    img = img.convert("RGB")
+                    tmp_dir = settings.workspace_root / "tmp" / "manual-docx-images" / storyboard.video_id / language
+                    tmp_dir.mkdir(parents=True, exist_ok=True)
+                    safe_path = tmp_dir / f"scene_{scene_idx:03d}_image_{img_idx:03d}.jpg"
+                    img.save(safe_path, "JPEG", quality=95, optimize=True)
+                    return safe_path
+            except Exception as exc:
+                raise RuntimeError(f"Frame konnte nicht fuer Word vorbereitet werden: {image_path.name}") from exc
+
         doc = Document()
         section = doc.sections[0]
         section.orientation = WD_ORIENT.LANDSCAPE
@@ -293,10 +317,11 @@ class ManualRenderService:
                 shade_cell(panel_cell, "FFFFFF")
                 img_path = frames_dir / filename
                 if filename and img_path.exists():
+                    safe_img_path = prepare_docx_image(img_path, lang, scene_idx, img_idx + 1)
                     add_label(img_cell.paragraphs[0], f"Abbildung {scene_idx}.{img_idx + 1}")
                     img_cell.paragraphs[0].add_run("\n")
                     run = img_cell.paragraphs[0].add_run()
-                    run.add_picture(str(img_path), width=Cm(7.8))
+                    run.add_picture(str(safe_img_path), width=Cm(7.8))
                 else:
                     img_cell.text = filename or "(kein Bild)"
 

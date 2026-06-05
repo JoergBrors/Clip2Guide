@@ -203,6 +203,8 @@ Benutzer
     → SSE: Fortschritt aus stdout per Regex-Parsing
     → Video-Ausgabe: workspace/output/{video_id}/tutorial_{lang}.mp4
     → Handbuch-Ausgabe: workspace/output/{video_id}/manual_{lang}.docx
+       Vor DOCX-Einbettung: Frames per Pillow validieren und als JPEG
+       unter workspace/tmp/manual-docx-images/{video_id}/{lang}/ vorbereiten
 
 [6] Projektstand sichern / wiederherstellen
     POST /api/videos/{id}/export-project
@@ -252,7 +254,7 @@ Alle Artefakte einer Verarbeitungssitzung leben unter derselben UUID:
 | `workspace/output/{uuid}/tutorial_{lang}.mp4` | Fertiges Tutorial | render.py |
 | `workspace/output/{uuid}/manual_{lang}.docx` | Fertiges DOCX-Handbuch | manual_render_service.py |
 | `workspace/output/{uuid}/project_{uuid}.zip` | Projektarchiv | project_archive_service.py |
-| `workspace/tmp/` | Temporaere Export-/Auto-Editor-Arbeitsdateien, Startup-Cleanup | main.py / services |
+| `workspace/tmp/` | Temporaere Export-, Auto-Editor- und DOCX-Bildarbeitsdateien, Startup-Cleanup | main.py / services |
 
 ---
 
