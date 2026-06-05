@@ -7,6 +7,7 @@ Die Version der App wird an **einer einzigen Stelle** gepflegt:
 **`package.json`** → `"version": "0.1.0"`
 
 electron-builder liest diese Version automatisch und verwendet sie für:
+
 - Installer-Dateinamen (`Clip2Guide Setup 0.1.0.exe`, `Clip2Guide-0.1.0.dmg`)
 - In-App-Versionsnummer (`window.clip2guide.getVersion()`)
 - GitHub-Release-Tag (muss manuell übereinstimmen)
@@ -36,7 +37,7 @@ Der Workflow besteht aus zwei Phasen: **Build** (Matrix) → **Publish**.
 #### Phase 1: Build-Matrix
 
 | Matrix-Eintrag | Runner | Befehl | Artefakt-Name |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `win x64` | `windows-latest` | `npx electron-builder --win --x64 --publish never` | `installer-win-x64` |
 | `mac arm64` | `macos-latest` | `npx electron-builder --mac --arm64 --publish never` | `installer-mac-arm64` |
 
@@ -64,10 +65,12 @@ release:
 Läuft erst, wenn **alle** Build-Jobs erfolgreich waren.
 
 Schritte:
-1. Artefakte aller drei Matrix-Jobs herunterladen
-2. `softprops/action-gh-release@v2` – GitHub Release mit allen Installer-Dateien erstellen
+
+1. Artefakte aller Matrix-Jobs herunterladen
+2. `ncipollo/release-action@v1` – GitHub Release mit allen Installer-Dateien erstellen
 
 **GitHub Release enthält:**
+
 - `Clip2Guide Setup {version}.exe` (Windows x64 NSIS-Installer)
 - `Clip2Guide-{version}-arm64.dmg` (macOS arm64 / Apple Silicon DMG)
 
@@ -93,12 +96,11 @@ git push origin v0.2.0
 
 ### Was dann passiert
 
-1. Alle drei Build-Jobs starten parallel
+1. Alle Build-Jobs starten parallel
 2. Windows-Build dauert typisch 4–6 Minuten
-3. macOS-Builds dauern typisch 5–8 Minuten je Job
-4. Sobald alle drei fertig sind, startet `release`
-5. GitHub Release wird automatisch angelegt (als Draft oder direkt published,
-   abhängig von der `softprops/action-gh-release`-Konfiguration)
+3. macOS-Build dauert typisch 5–8 Minuten
+4. Sobald alle fertig sind, startet `release`
+5. GitHub Release wird automatisch angelegt
 
 ---
 
@@ -141,7 +143,9 @@ mac:
   Datenschutz & Sicherheit → „Trotzdem öffnen").
 - **Kein Apple-Developer-Konto** / kein Notarisierungsprozess konfiguriert.
 - Die `arch`-Liste wurde **aus `electron-builder.yml` entfernt** – die Architektur
-  wird ausschließlich über das CLI-Flag `--x64` / `--arm64` im Workflow gesteuert.
+  wird ausschließlich über das CLI-Flag `--arm64` im Workflow gesteuert.
+- **Ad-hoc Signierung** im CI verhindert die „App ist beschädigt"-Meldung:
+  `codesign --deep --force --sign -` nach dem electron-builder-Schritt.
 
 ---
 
@@ -166,10 +170,10 @@ npm run build:dist
 ## Bekannte Probleme und Lösungen
 
 | Problem | Ursache | Lösung |
-|---|---|---|
+| --- | --- | --- |
 | Leere GitHub Releases-Seite | Build-Job(s) sind fehlgeschlagen → `release`-Job startet nicht | Build-Fehler beheben, neuen Tag pushen |
 | Windows-NSIS signiert nicht | Kein Code-Signing-Zertifikat konfiguriert | SmartScreen-Warnung wird Benutzern angezeigt; akzeptabel für interne Tools |
-| macOS Gatekeeper blockiert App | `hardenedRuntime: false`, keine Notarisierung | Benutzer: Systemeinstellungen → Sicherheit → „Trotzdem öffnen" |
+| macOS Gatekeeper blockiert App | `hardenedRuntime: false`, keine Notarisierung | Rechtsklick → „Öffnen"; bei „beschädigt"-Meldung: `xattr -cr /Applications/Clip2Guide.app` |
 | `icon.icns` fehlt beim macOS-Build | `icon.icns` ist nicht im Repo (wird im CI generiert) | CI-Schritt `iconutil -c icns icon/icon.iconset -o icon/icon.icns` ist im Workflow |
 
 ---
@@ -187,7 +191,7 @@ GitHub Actions Artefakte (Zwischen-Ergebnisse der Build-Matrix) werden nach
 Das Projekt nutzt Semantic Versioning (`MAJOR.MINOR.PATCH`):
 
 | Änderungstyp | Version erhöhen |
-|---|---|
+| --- | --- |
 | Breaking Change (z.B. .env-Format geändert) | MAJOR |
 | Neue Funktion (neuer Workflow-Schritt, neuer Provider) | MINOR |
 | Bugfix, Dokumentation, Refactoring | PATCH |

@@ -79,6 +79,19 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
 
+      # Ad-hoc Signierung: verhindert die macOS-Meldung "App ist beschädigt".
+      # '-' = lokale Ad-hoc-Identität, kein Apple-Zertifikat nötig.
+      # Zeigt beim ersten Start nur noch "unbekannter Entwickler" → Rechtsklick → Öffnen.
+      - name: Ad-hoc sign app (macOS)
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          APP=$(find dist/release/mac* -name "*.app" -maxdepth 2 | head -1)
+          echo "Signing: $APP"
+          codesign --deep --force --sign - "$APP"
+          # Quarantine-Attribut aus DMG und allen enthaltenen Dateien entfernen
+          find dist/release -name "*.dmg" -exec xattr -cr {} \;
+
       - name: List release artifacts
         shell: bash
         run: ls -lh dist/release/ 2>/dev/null || dir dist\release 2>/dev/null || true
@@ -137,7 +150,9 @@ jobs:
               Auto-Editor herunterlädt. Danach AI-Provider und API-Key eintragen.
             - **macOS**: `Clip2Guide-*.dmg` herunterladen, mounten und in Applications ziehen.
               **Hinweis**: Da kein Apple-Entwicklerzertifikat verwendet wird, erscheint beim
-              ersten Start eine Gatekeeper-Warnung → Rechtsklick auf App → „Öffnen".
+              ersten Start eine Gatekeeper-Warnung → **Rechtsklick auf die App → „Öffnen"**.
+              Falls macOS die App als „beschädigt" meldet:
+              `xattr -cr /Applications/Clip2Guide.app` im Terminal ausführen.
 
             ### API-Keys
             API-Keys werden **nicht** im Installer gespeichert. Du trägst sie beim ersten Start
