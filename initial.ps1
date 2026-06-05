@@ -192,6 +192,23 @@ if (-not $SkipPythonInstall) {
 
     Write-Host "Installiere Python-Module aus $RequirementsPath..."
     python -m pip install --upgrade -r $RequirementsPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip install -r requirements.txt fehlgeschlagen (ExitCode=$LASTEXITCODE)"
+    }
+
+    # Kritische Module explizit prüfen
+    $CriticalModules = @("fastapi", "uvicorn", "pydantic", "cv2", "moviepy", "PIL", "docx")
+    $MissingModules = @()
+    foreach ($mod in $CriticalModules) {
+        & (Join-Path $VenvPath "Scripts\python.exe") -c "import $mod" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $MissingModules += $mod
+        }
+    }
+    if ($MissingModules.Count -gt 0) {
+        throw "Folgende Python-Module fehlen nach pip install: $($MissingModules -join ', ')"
+    }
+    Write-Host "[OK] Alle Kern-Python-Module vorhanden"
 }
 
 # FFmpeg
@@ -314,7 +331,7 @@ $AnyFailed = $false
 if (-not $SkipPythonInstall) {
     Write-Host "Python-Module..."
     try {
-        $ModuleCheck = "import fastapi, pydantic, cv2, moviepy, PIL, dotenv; print('[OK] Kernmodule geladen'); print(f'     MoviePy {moviepy.__version__}  |  Pillow {PIL.__version__}')"
+        $ModuleCheck = "import fastapi, pydantic, cv2, moviepy, PIL, dotenv, docx; print('[OK] Kernmodule geladen'); print(f'     MoviePy {moviepy.__version__}  |  Pillow {PIL.__version__}')"
         & (Join-Path $VenvPath "Scripts\python.exe") -c $ModuleCheck
     } catch {
         Write-Warning "[FAIL] Python-Modultest fehlgeschlagen: $_"
