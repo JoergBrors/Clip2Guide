@@ -23,9 +23,6 @@ jobs:
             arch: x64
           - os: macos-latest
             platform: mac
-            arch: x64
-          - os: macos-latest
-            platform: mac
             arch: arm64
 
     steps:
@@ -107,13 +104,6 @@ jobs:
         with:
           name: installer-win-x64
           path: artifacts/win
-        continue-on-error: true
-
-      - name: Download macOS x64 installer
-        uses: actions/download-artifact@v4
-        with:
-          name: installer-mac-x64
-          path: artifacts/mac
         continue-on-error: true
 
       - name: Download macOS arm64 installer

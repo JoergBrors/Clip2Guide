@@ -38,19 +38,10 @@ Der Workflow besteht aus zwei Phasen: **Build** (Matrix) → **Publish**.
 | Matrix-Eintrag | Runner | Befehl | Artefakt-Name |
 |---|---|---|---|
 | `win x64` | `windows-latest` | `npx electron-builder --win --x64 --publish never` | `installer-win-x64` |
-| `mac x64` | `macos-latest` | `npx electron-builder --mac --x64 --publish never` | `installer-mac-x64` |
 | `mac arm64` | `macos-latest` | `npx electron-builder --mac --arm64 --publish never` | `installer-mac-arm64` |
 
-> **Warum zwei separate macOS-Jobs?**
-> electron-builder hängt beim Bau von DMGs eine Disk-Image-Partition unter
-> `/Volumes/Clip2Guide 0.1.0` aus. Würden x64 und arm64 im selben Job parallel
-> gebaut, entstehen zwei Volumes mit identischem Namen → `hdiutil`-Fehler.
-> Separate Jobs laufen auf separaten Runner-VMs und vermeiden den Konflikt.
-
-> **Warum `macos-latest` für x64?**
-> GitHub hat `macos-13` (Intel-Runner) per Mai 2025 abgekündigt.
-> `macos-latest` ist ein Apple-Silicon-Runner. electron-builder kann jedoch
-> auch dort per Cross-Compilation ein x64-DMG erzeugen (`--x64`-Flag).
+> **Nur arm64 für macOS:** Die App wird ausschließlich nativ für Apple Silicon gebaut.
+> Ein x64-Build via Rosetta-Cross-Compilation wird nicht mehr erzeugt.
 
 #### Build-Schritte (alle Plattformen)
 
@@ -78,7 +69,6 @@ Schritte:
 
 **GitHub Release enthält:**
 - `Clip2Guide Setup {version}.exe` (Windows x64 NSIS-Installer)
-- `Clip2Guide-{version}.dmg` (macOS x64 DMG)
 - `Clip2Guide-{version}-arm64.dmg` (macOS arm64 / Apple Silicon DMG)
 
 ---
@@ -164,17 +154,11 @@ npm run build:dist
 # Ausgabe: dist/Clip2Guide Setup 0.1.0.exe
 ```
 
-### macOS (aktuelle Architektur)
+### macOS (arm64 / Apple Silicon)
 
 ```bash
 npm run build:dist
-# Ausgabe: dist/Clip2Guide-0.1.0.dmg  (arm64 auf Apple Silicon)
-```
-
-### macOS (Cross-Compilation x64 auf Apple Silicon)
-
-```bash
-npx electron-builder --mac --x64
+# Ausgabe: dist/Clip2Guide-0.1.0.dmg  (arm64)
 ```
 
 ---
@@ -183,8 +167,6 @@ npx electron-builder --mac --x64
 
 | Problem | Ursache | Lösung |
 |---|---|---|
-| `hdiutil detach: Resource busy` | x64 und arm64 werden im selben Job gebaut, beide mounten `/Volumes/Clip2Guide {version}` | Zwei separate Matrix-Jobs (je ein Arch pro Job) |
-| `macos-13` runner not available | GitHub hat `macos-13` per Mai 2025 eingestellt | `macos-latest` verwenden (Apple Silicon, unterstützt Cross-Compilation) |
 | Leere GitHub Releases-Seite | Build-Job(s) sind fehlgeschlagen → `release`-Job startet nicht | Build-Fehler beheben, neuen Tag pushen |
 | Windows-NSIS signiert nicht | Kein Code-Signing-Zertifikat konfiguriert | SmartScreen-Warnung wird Benutzern angezeigt; akzeptabel für interne Tools |
 | macOS Gatekeeper blockiert App | `hardenedRuntime: false`, keine Notarisierung | Benutzer: Systemeinstellungen → Sicherheit → „Trotzdem öffnen" |
