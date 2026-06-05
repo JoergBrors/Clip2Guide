@@ -72,8 +72,16 @@ export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImp
 
   // ── Bild-Handler ───────────────────────────────────────────────────────────
 
+  const _HEIC_EXTS = new Set([".heic", ".heif"]);
+  function _isImageFile(f: File): boolean {
+    if (f.type.startsWith("image/")) return true;
+    // Browser kennt HEIC oft nicht → MIME-Type ist leer; Endung prüfen
+    const ext = f.name.slice(f.name.lastIndexOf(".")).toLowerCase();
+    return _HEIC_EXTS.has(ext);
+  }
+
   function addFiles(files: FileList | File[]) {
-    const arr = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    const arr = Array.from(files).filter(_isImageFile);
     if (!arr.length) return;
     Promise.all(
       arr.map(
@@ -243,7 +251,7 @@ export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImp
       {mode === "images" && (
         <>
           <p style={{ color: "#aaa", marginBottom: 20 }}>
-            Lade mehrere Bilder hoch (JPEG, PNG, WebP). In Schritt&nbsp;2 werden sie auf
+            Lade mehrere Bilder hoch (JPEG, PNG, WebP, HEIC). In Schritt&nbsp;2 werden sie auf
             eine einheitliche Größe gebracht.
           </p>
 
