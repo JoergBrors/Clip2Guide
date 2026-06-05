@@ -88,19 +88,30 @@ TEXT_PADDING = 30
 # ── Hilfsfunktionen ────────────────────────────────────────────────────────────
 
 def _load_font(size: int):
-    """Laedt einen System-Font, faellt auf PIL-Standard zurueck."""
+    """Laedt einen System-Font, faellt auf PIL-Standard zurueck.
+    Reihenfolge: macOS → Windows → Linux → PIL-Fallback."""
     for font_path in [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        # macOS – Helvetica Neue ist auf jedem Mac vorinstalliert
+        "/System/Library/Fonts/HelveticaNeue.ttc",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/Library/Fonts/Arial Bold.ttf",
+        "/Library/Fonts/Arial.ttf",
+        # macOS – Supplemental (Homebrew/Office-Fonts)
+        "/Library/Fonts/Microsoft/Arial Bold.ttf",
+        "/Library/Fonts/Microsoft/Arial.ttf",
+        # Windows
         "C:/Windows/Fonts/segoeui.ttf",
         "C:/Windows/Fonts/arial.ttf",
+        # Linux
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     ]:
         if Path(font_path).exists():
             try:
                 return ImageFont.truetype(font_path, size)
             except OSError:
                 continue
-    return ImageFont.load_default()
+    return ImageFont.load_default(size)
 
 
 def _wrap_text(text: str, font, max_width: int, draw: ImageDraw.Draw) -> str:
