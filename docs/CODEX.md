@@ -697,9 +697,12 @@ USER_LOCAL_DIR: string
 ### macOS arm64 Setup-Korrekturen (initial.sh)
 
 - `ROOT` wird aus der Env-Variable `ROOT` gelesen (gesetzt von Electron `ipc.ts` via `USER_LOCAL_DIR`), mit dem Skript-Verzeichnis als Fallback. Damit landet das venv korrekt in `~/Library/Application Support/Clip2Guide/backend/.venv`.
-- Architektur-Check beim Skriptstart: `uname -m` muss `arm64` liefern; bei Rosetta-Umgebung erscheint eine klare Warnung mit Lösungshinweis.
-- Python-Architektur-Check vor und nach dem venv-Erstellen: wenn `python3` als `x86_64` läuft, sucht das Skript `/opt/homebrew/opt/python@3.13/bin/python3`. Falsch-architekturierte venvs werden automatisch gelöscht und neu erstellt.
+- Python-Binary-Auflösung mit expliziter Priorität: `python3.13` (Homebrew arm64) → `python3` (Fallback). Das macOS-System-Python 3.9 wird damit nie verwendet.
+- Mindestversions-Check: Python < 3.10 bricht mit klarer Fehlermeldung ab (`TemporaryDirectory(ignore_cleanup_errors=True)` erfordert ≥ 3.10).
+- Architektur-Check: auf arm64-Macs muss das Python ebenfalls arm64 sein; bei x86_64 wird Homebrew-Binary unter `${BREW_PREFIX}/opt/python@3.13/bin/python3.13` gesucht.
+- Falsch-architekturierte venvs werden automatisch gelöscht und neu erstellt.
 - FFmpeg-Architektur-Check nach dem Download via `file`-Befehl.
+- `create_tutorial.py`: `TemporaryDirectory(ignore_cleanup_errors=True)` → `TemporaryDirectory()` (Parameter erst ab 3.10, Skript läuft jetzt auf ≥ 3.10).
 
 ### Startup-Cache-Bereinigung
 

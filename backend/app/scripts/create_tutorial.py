@@ -391,7 +391,7 @@ def render_language(
     )
     frames_done = 0
 
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_str:
+    with tempfile.TemporaryDirectory() as tmp_str:
         tmp_dir = Path(tmp_str)
         clips = []
 

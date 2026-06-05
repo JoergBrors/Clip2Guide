@@ -89,46 +89,63 @@ ok "Verzeichnisstruktur angelegt"
 # ── Python Umgebung ────────────────────────────────────────────────────────────
 section "Python Umgebung"
 
-if ! command -v python3 &>/dev/null; then
-  echo "[WARN] python3 nicht gefunden – versuche automatische Installation..."
-  if command -v brew &>/dev/null; then
-    echo "Installiere python@$PYTHON_VERSION via Homebrew..."
-    brew install "python@$PYTHON_VERSION"
-    # Homebrew-Shims in PATH aufnehmen
-    BREW_PREFIX="$(brew --prefix)"
-    export PATH="$BREW_PREFIX/opt/python@$PYTHON_VERSION/bin:$PATH"
-    ok "Python installiert: $(python3 --version 2>&1)"
-  else
-    echo "[ERROR] Homebrew ist nicht installiert."
-    echo "  Bitte Homebrew installieren:  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-    echo "  Danach dieses Skript erneut ausfuehren."
-    exit 1
+# ── Python-Binary auflösen ────────────────────────────────────────────────────
+# Priorität: python3.13 (Homebrew arm64) → python3 (System-Fallback)
+# Das macOS-System-Python ist 3.9 und unterstützt u.a. keine
+# TemporaryDirectory(ignore_cleanup_errors=True) – daher explizit 3.13 erzwingen.
+BREW_PREFIX=""
+if command -v brew &>/dev/null; then
+  BREW_PREFIX="$(brew --prefix 2>/dev/null || echo "")"
+fi
+BREW_PYTHON_BIN="${BREW_PREFIX}/opt/python@${PYTHON_VERSION}/bin"
+# Binary-Namen: python3.13, dann python3
+PYTHON3_CMD=""
+for candidate in \
+    "${BREW_PYTHON_BIN}/python${PYTHON_VERSION}" \
+    "${BREW_PYTHON_BIN}/python3" \
+    "python${PYTHON_VERSION}" \
+    "python3"; do
+  if command -v "$candidate" &>/dev/null || [[ -f "$candidate" ]]; then
+    PYTHON3_CMD="$candidate"
+    break
   fi
+done
+if [[ -z "$PYTHON3_CMD" ]]; then
+  echo "[ERROR] Kein Python gefunden."
+  echo "  Bitte installieren: brew install python@${PYTHON_VERSION}"
+  exit 1
 fi
 
-PYTHON_FOUND=$(python3 --version 2>&1)
-ok "$PYTHON_FOUND"
+# Version und Architektur des gewählten Python prüfen
+PYTHON_FOUND=$("$PYTHON3_CMD" --version 2>&1)
+PYTHON_MINOR=$("$PYTHON3_CMD" -c "import sys; print(sys.version_info.minor)" 2>/dev/null || echo "0")
+ok "Python gefunden: $PYTHON_FOUND ($PYTHON3_CMD)"
+
+if [[ "$PYTHON_MINOR" -lt 10 ]]; then
+  echo "[ERROR] Python ${PYTHON_FOUND} ist zu alt – mindestens 3.10 erforderlich."
+  echo "  Bitte installieren: brew install python@${PYTHON_VERSION}"
+  echo "  Dann Skript erneut ausführen."
+  if ! command -v brew &>/dev/null; then
+    echo "  Homebrew fehlt: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+  fi
+  exit 1
+fi
 
 if [[ "$SKIP_PYTHON" == "false" ]]; then
-  # Auf Apple Silicon: sicherstellen dass python3 nativ arm64 ist, nicht via Rosetta
-  PYTHON_ARCH=$(python3 -c "import platform; print(platform.machine())" 2>/dev/null || echo "unknown")
+  # Architektur-Check: auf Apple Silicon muss python arm64 sein
+  PYTHON_ARCH=$("$PYTHON3_CMD" -c "import platform; print(platform.machine())" 2>/dev/null || echo "unknown")
   if [[ "$ARCH" == "arm64" && "$PYTHON_ARCH" != "arm64" ]]; then
-    warn "python3 läuft als '$PYTHON_ARCH' statt 'arm64'."
-    warn "Homebrew-Python für arm64 verwenden:"
+    warn "Python läuft als '$PYTHON_ARCH' statt 'arm64' – Homebrew-Python wird benötigt."
     warn "  brew install python@${PYTHON_VERSION}"
-    warn "  export PATH=\"/opt/homebrew/opt/python@${PYTHON_VERSION}/bin:\$PATH\""
-    warn "  Danach dieses Skript erneut ausführen."
-    # Versuche Homebrew-Python direkt zu finden
-    BREW_PYTHON="/opt/homebrew/opt/python@${PYTHON_VERSION}/bin/python${PYTHON_VERSION%.*}"
-    if [[ -f "$BREW_PYTHON" ]]; then
-      warn "Homebrew-Python gefunden: $BREW_PYTHON – verwende dieses."
-      PYTHON3_CMD="$BREW_PYTHON"
+    BREW_CANDIDATE="${BREW_PYTHON_BIN}/python${PYTHON_VERSION}"
+    if [[ -f "$BREW_CANDIDATE" ]]; then
+      warn "Homebrew-Python gefunden: $BREW_CANDIDATE – verwende dieses."
+      PYTHON3_CMD="$BREW_CANDIDATE"
     else
-      PYTHON3_CMD="python3"
+      warn "Homebrew-Python nicht gefunden – bitte manuell installieren."
     fi
   else
     ok "Python-Architektur: $PYTHON_ARCH"
-    PYTHON3_CMD="python3"
   fi
 
   if [[ ! -d "$VENV_PATH" ]]; then
