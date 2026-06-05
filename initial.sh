@@ -6,7 +6,9 @@ set -euo pipefail
 
 # ── Standardwerte ─────────────────────────────────────────────────────────────
 PYTHON_VERSION="${PYTHON_VERSION:-3.13}"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ROOT kann per Env-Variable (Electron-Produktionsmodus) oder --root-Argument
+# überschrieben werden. Standard: Verzeichnis des Skripts selbst.
+ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 APP_SOURCE_DIR="${APP_SOURCE_DIR:-}"
 SKIP_PYTHON=false
 SKIP_FFMPEG=false
@@ -66,6 +68,13 @@ section "Clip2Guide – Initialisierung"
 echo "Root       : $ROOT"
 echo "Python     : $PYTHON_VERSION"
 echo "Architektur: $ARCH"
+# Sicherheitscheck: venv muss arm64-nativ sein (kein Rosetta-x86_64)
+if [[ "$ARCH" == "arm64" ]]; then
+  ok "Nativ arm64 – kein Rosetta"
+else
+  warn "Architektur ist $ARCH – auf Apple-Silicon-Macs sollte uname -m 'arm64' liefern."
+  warn "Falls Rosetta aktiv ist: Terminal beenden, nativ (nicht via Rosetta) neu starten."
+fi
 
 # ── Verzeichnisstruktur ────────────────────────────────────────────────────────
 mkdir -p \
@@ -101,15 +110,52 @@ PYTHON_FOUND=$(python3 --version 2>&1)
 ok "$PYTHON_FOUND"
 
 if [[ "$SKIP_PYTHON" == "false" ]]; then
+  # Auf Apple Silicon: sicherstellen dass python3 nativ arm64 ist, nicht via Rosetta
+  PYTHON_ARCH=$(python3 -c "import platform; print(platform.machine())" 2>/dev/null || echo "unknown")
+  if [[ "$ARCH" == "arm64" && "$PYTHON_ARCH" != "arm64" ]]; then
+    warn "python3 läuft als '$PYTHON_ARCH' statt 'arm64'."
+    warn "Homebrew-Python für arm64 verwenden:"
+    warn "  brew install python@${PYTHON_VERSION}"
+    warn "  export PATH=\"/opt/homebrew/opt/python@${PYTHON_VERSION}/bin:\$PATH\""
+    warn "  Danach dieses Skript erneut ausführen."
+    # Versuche Homebrew-Python direkt zu finden
+    BREW_PYTHON="/opt/homebrew/opt/python@${PYTHON_VERSION}/bin/python${PYTHON_VERSION%.*}"
+    if [[ -f "$BREW_PYTHON" ]]; then
+      warn "Homebrew-Python gefunden: $BREW_PYTHON – verwende dieses."
+      PYTHON3_CMD="$BREW_PYTHON"
+    else
+      PYTHON3_CMD="python3"
+    fi
+  else
+    ok "Python-Architektur: $PYTHON_ARCH"
+    PYTHON3_CMD="python3"
+  fi
+
   if [[ ! -d "$VENV_PATH" ]]; then
     echo "Erstelle Virtual Environment: $VENV_PATH"
-    python3 -m venv "$VENV_PATH"
+    "$PYTHON3_CMD" -m venv "$VENV_PATH"
   else
-    ok "Virtual Environment bereits vorhanden"
+    # Bestehende venv auf korrekte Architektur prüfen
+    VENV_ARCH=$("$VENV_PATH/bin/python" -c "import platform; print(platform.machine())" 2>/dev/null || echo "unknown")
+    if [[ "$ARCH" == "arm64" && "$VENV_ARCH" != "arm64" ]]; then
+      warn "Bestehende venv ist '$VENV_ARCH' – lösche und erstelle neu als arm64."
+      rm -rf "$VENV_PATH"
+      "$PYTHON3_CMD" -m venv "$VENV_PATH"
+    else
+      ok "Virtual Environment bereits vorhanden ($VENV_ARCH)"
+    fi
   fi
 
   # shellcheck disable=SC1090
   source "$VENV_PATH/bin/activate"
+
+  # Nochmals Architektur des venv-Python bestätigen
+  ACTIVE_ARCH=$(python -c "import platform; print(platform.machine())" 2>/dev/null || echo "unknown")
+  if [[ "$ARCH" == "arm64" && "$ACTIVE_ARCH" != "arm64" ]]; then
+    fail "venv-Python läuft immer noch als '$ACTIVE_ARCH' – Backend wird nicht starten!"
+  else
+    ok "venv-Python Architektur: $ACTIVE_ARCH"
+  fi
 
   python -m pip install --upgrade pip setuptools wheel
 
@@ -152,6 +198,15 @@ if [[ "$SKIP_FFMPEG" == "false" ]]; then
 
     rm -f "$TOOLS_DIR/ffmpeg.zip" "$TOOLS_DIR/ffprobe.zip"
     chmod +x "$FFMPEG_EXE" "$FFPROBE_EXE"
+
+    # Architektur der heruntergeladenen Binary prüfen
+    FFMPEG_FILE_ARCH=$(file "$FFMPEG_EXE" 2>/dev/null || echo "")
+    if [[ "$ARCH" == "arm64" && "$FFMPEG_FILE_ARCH" != *"arm64"* ]]; then
+      warn "FFmpeg-Binary ist NICHT arm64: $FFMPEG_FILE_ARCH"
+      warn "evermeet.cx liefert immer die native Architektur – prüfe ob curl Rosetta nutzt."
+    else
+      ok "FFmpeg-Architektur: arm64"
+    fi
 
     ok "FFmpeg installiert: $FFMPEG_BIN"
   else

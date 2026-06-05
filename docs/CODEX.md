@@ -687,6 +687,13 @@ USER_LOCAL_DIR: string
 - `frontend/src/components/RenderPanel.tsx` bietet Ausgabeformat-Auswahl, Handbuch-KI-Optimierung sowie Provider-/Modellauswahl analog zur Storyboard-Analyse.
 - Beim Handbuch-KI-Rendering sendet `_render_manual_worker()` zusaetzlich `debug`-SSE-Events fuer Prompt und KI-Antwort, damit lange `complete_text()`-Aufrufe im Debug-Log sichtbar sind. Render-Exceptions werden mit Fehlerklasse und Sprache geloggt, damit die UI nie einen leeren `Fehler:`-Text anzeigen muss.
 
+### macOS arm64 Setup-Korrekturen (initial.sh)
+
+- `ROOT` wird aus der Env-Variable `ROOT` gelesen (gesetzt von Electron `ipc.ts` via `USER_LOCAL_DIR`), mit dem Skript-Verzeichnis als Fallback. Damit landet das venv korrekt in `~/Library/Application Support/Clip2Guide/backend/.venv`.
+- Architektur-Check beim Skriptstart: `uname -m` muss `arm64` liefern; bei Rosetta-Umgebung erscheint eine klare Warnung mit Lösungshinweis.
+- Python-Architektur-Check vor und nach dem venv-Erstellen: wenn `python3` als `x86_64` läuft, sucht das Skript `/opt/homebrew/opt/python@3.13/bin/python3`. Falsch-architekturierte venvs werden automatisch gelöscht und neu erstellt.
+- FFmpeg-Architektur-Check nach dem Download via `file`-Befehl.
+
 ### Startup-Cache-Bereinigung
 
 - `backend/app/main.py` nutzt einen FastAPI-`lifespan`-Handler und bereinigt beim Backend-Start `workspace/tmp/`. Dadurch werden alte temporaere ZIP-Exportfragmente und sonstige Laufzeitreste entfernt, ohne persistente Uploads, Frames, Storyboards oder Outputs anzutasten.
