@@ -2,15 +2,16 @@
 
 ## Versionierung
 
-Die Version der App wird an **einer einzigen Stelle** gepflegt:
+Die Version der App wird über den Git-Tag gesteuert und automatisch synchronisiert.
 
-**`package.json`** → `"version": "0.1.0"`
+**CI-Automatik**: Beim Pushen eines Tags `v1.2.3` setzt der CI-Workflow automatisch
+`npm version 1.2.3 --no-git-tag-version` → `package.json` muss **nicht** manuell angepasst werden.
 
-electron-builder liest diese Version automatisch und verwendet sie für:
+electron-builder liest die Version aus `package.json` und verwendet sie für:
 
-- Installer-Dateinamen (`Clip2Guide Setup 0.1.0.exe`, `Clip2Guide-0.1.0.dmg`)
+- Installer-Dateinamen (`Clip2Guide Setup {version}.exe`, `Clip2Guide-{version}-arm64.pkg`)
 - In-App-Versionsnummer (`window.clip2guide.getVersion()`)
-- GitHub-Release-Tag (muss manuell übereinstimmen)
+- GitHub-Release-Tag
 
 ---
 
@@ -121,13 +122,30 @@ directories:
 files:
   - dist/renderer/**/*
   - dist/electron/**/*
-  - backend/**/*
-  - tools/**/*
+  - backend/app/**
+  - backend/requirements.txt
+
+extraResources:
+  - from: initial.ps1
+    to: initial.ps1
+  - from: initial.sh
+    to: initial.sh
+  - from: localstuff/env.example
+    to: env.example
+  - from: backend/requirements.txt
+    to: backend/requirements.txt
+
+asarUnpack:
+  - "**/*.py"
+  - "**/*.pyd"
+  - "**/*.so"
+  - "**/*.dylib"
 
 win:
   target:
     - target: nsis
       arch: [x64]
+  artifactName: "Clip2Guide-${version}-${arch}-${os}.${ext}"
 
 nsis:
   oneClick: false
@@ -135,10 +153,11 @@ nsis:
 
 mac:
   target:
-    - target: dmg
+    - target: pkg
   icon: icon/icon.icns
   hardenedRuntime: false
   gatekeeperAssess: false
+  artifactName: "Clip2Guide-${version}-arm64.${ext}"
 ```
 
 ### Wichtige Hinweise zur macOS-Konfiguration
@@ -153,6 +172,11 @@ mac:
 - Die Architektur wird ausschließlich über das CLI-Flag `--arm64` im Workflow gesteuert.
 - **Ad-hoc Signierung** im CI vor und nach dem Packaging:
   `codesign --deep --force --sign -` auf die `.app`.
+- **`extraResources`**: `initial.sh`, `initial.ps1`, `env.example` und `backend/requirements.txt`
+  landen unter `resources/` in der paketierten App. Das Setup-Skript und `requirements.txt`
+  sind damit auch ohne ASAR-Entpacken zugänglich.
+- **`asarUnpack`**: Alle `.py`, `.pyd`, `.so`, `.dylib` Dateien werden aus dem ASAR entpackt,
+  damit Python sie direkt laden kann.
 
 ---
 
@@ -162,14 +186,14 @@ mac:
 
 ```powershell
 npm run build:dist
-# Ausgabe: dist/Clip2Guide Setup 0.1.0.exe
+# Ausgabe: dist/Clip2Guide-{version}-x64-win.exe
 ```
 
 ### macOS (arm64 / Apple Silicon)
 
 ```bash
 npm run build:dist
-# Ausgabe: dist/Clip2Guide-0.1.0.dmg  (arm64)
+# Ausgabe: dist/Clip2Guide-{version}-arm64.pkg
 ```
 
 ---

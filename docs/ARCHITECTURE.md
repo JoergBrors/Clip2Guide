@@ -64,7 +64,8 @@ Clip2Guide/
 │       │   ├── JsonPreview.tsx       # Rohes JSON anzeigen
 │       │   ├── ImageHoverZoom.tsx    # Zoom-Overlay
 │       │   ├── RenderPanel.tsx       # Schritt 5: Rendering + Download
-│       │   └── SetupWizard.tsx       # Erststart-Einrichtung
+│       │   ├── SetupWizard.tsx       # Erststart-Einrichtung
+│       │   └── DebugPanel.tsx        # Debug & Diagnose (via SettingsPanel → 🔧 Debug)
 │       └── styles/
 │
 ├── backend/
@@ -395,11 +396,16 @@ Definiert in `preload.ts`, implementiert in `main.ts`:
 | `setup:read-env` | invoke | Liest aktuelle `.env`-Werte |
 | `setup:completed` | send | Signalisiert dem Main-Prozess: Setup fertig |
 | `app:uninstall` | invoke | Deinstallations-Dialog; `deleteUserData: boolean` |
+| `debug:info` | invoke | Systeminfos, Backend-Status, Pfade, venv-Architektur, FFmpeg-Arch, Workspace-Verzeichnisse, Log-Dateien |
+| `debug:clear-cache` | invoke | Electron-Cache + Storage + workspace/tmp leeren |
+| `debug:open-log-dir` | invoke | Log-Verzeichnis in Finder/Explorer öffnen |
+| `debug:open-env-file` | invoke | `.env` im Texteditor öffnen |
 
 **contextBridge-Objekte:**
 - `window.clip2guide` – `backendUrl`, `openPath`, `openFileDialog`, `saveFileDialog`, `getVersion`
 - `window.setupAPI` – `isComplete`, `runInitial`, `onLog`, `writeEnv`, `readEnv`, `complete`
 - `window.appAPI` – `uninstall(deleteUserData)`
+- `window.debugAPI` – `getInfo`, `clearCache`, `openLogDir`, `openEnvFile`
 
 ---
 

@@ -4,7 +4,7 @@ Dieses Dokument ist der **vollständige, maschinenlesbare Kontext** für automat
 Code-Änderungen (OpenAI Codex, GitHub Copilot Agent, etc.).
 Es beschreibt Dateistruktur, genaue Signaturen, Konventionen und Muster.
 
-> Stand: 2025-06-05 · Basis-Branch: `main`
+> Stand: 2026-06-06 · Basis-Branch: `main`
 
 ---
 
@@ -694,15 +694,16 @@ USER_LOCAL_DIR: string
 - `frontend/src/components/RenderPanel.tsx` bietet Ausgabeformat-Auswahl, Handbuch-KI-Optimierung sowie Provider-/Modellauswahl analog zur Storyboard-Analyse.
 - Beim Handbuch-KI-Rendering sendet `_render_manual_worker()` zusaetzlich `debug`-SSE-Events fuer Prompt und KI-Antwort, damit lange `complete_text()`-Aufrufe im Debug-Log sichtbar sind. Render-Exceptions werden mit Fehlerklasse und Sprache geloggt, damit die UI nie einen leeren `Fehler:`-Text anzeigen muss.
 
-### macOS arm64 Setup-Korrekturen (initial.sh)
+### macOS arm64 Setup-Korrekturen (initial.sh / initial.ps1)
 
 - `ROOT` wird aus der Env-Variable `ROOT` gelesen (gesetzt von Electron `ipc.ts` via `USER_LOCAL_DIR`), mit dem Skript-Verzeichnis als Fallback. Damit landet das venv korrekt in `~/Library/Application Support/Clip2Guide/backend/.venv`.
-- Python-Binary-Auflösung mit expliziter Priorität: `python3.13` (Homebrew arm64) → `python3` (Fallback). Das macOS-System-Python 3.9 wird damit nie verwendet.
+- Python-Binary-Auflösung mit expliziter Priorität: `python3.13` (Homebrew arm64) → `python3` (Fallback). Das macOS-System-Python 3.9 wird damit nie verwendet. Kandidaten-Liste enthält absolute Homebrew-Pfade (`/opt/homebrew/opt/python@3.13/bin/python3.13` u.a.) da Electron-Sandbox kein Homebrew-PATH hat.
 - Mindestversions-Check: Python < 3.10 bricht mit klarer Fehlermeldung ab (`TemporaryDirectory(ignore_cleanup_errors=True)` erfordert ≥ 3.10).
 - Architektur-Check: auf arm64-Macs muss das Python ebenfalls arm64 sein; bei x86_64 wird Homebrew-Binary unter `${BREW_PREFIX}/opt/python@3.13/bin/python3.13` gesucht.
 - Falsch-architekturierte venvs werden automatisch gelöscht und neu erstellt.
 - FFmpeg-Architektur-Check nach dem Download via `file`-Befehl.
 - `create_tutorial.py`: `TemporaryDirectory(ignore_cleanup_errors=True)` → `TemporaryDirectory()` (Parameter erst ab 3.10, Skript läuft jetzt auf ≥ 3.10).
+- **pip-Install-Absicherung** (beide Skripte): `pip install -r requirements.txt` wird mit Exit-Code-Prüfung ausgeführt; bei Fehler bricht das Setup sofort ab. Nach dem Install werden alle kritischen Module explizit importiert (`fastapi`, `uvicorn`, `pydantic`, `cv2`, `moviepy`, `PIL`, `docx`); fehlt eines, wird es namentlich gemeldet und das Setup bricht ab. Der abschließende Selbsttest prüft ebenfalls `docx`.
 
 ### Startup-Cache-Bereinigung
 

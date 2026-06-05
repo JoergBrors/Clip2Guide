@@ -146,14 +146,20 @@ Das Projekt verwendet **zwei separate** `tsconfig.json`-Dateien.
 | `uvicorn[standard]` | ASGI-Server |
 | `pydantic` | Datenvalidierung (Settings, Modelle) |
 | `pydantic-settings` | Settings aus .env |
+| `python-dotenv` | .env-Datei laden |
 | `python-multipart` | Datei-Upload (multipart/form-data) |
-| `google-genai` | Gemini-API-Client |
-| `openai` | OpenAI- und Azure-OpenAI-Client |
+| `aiofiles` | Async-Dateioperationen |
+| `requests` | HTTP-Client (sync, für Downloads) |
+| `httpx` | Async HTTP (intern genutzt) |
+| `numpy` | Bildverarbeitung (Hilfsfunktionen) |
+| `opencv-python` | Pause-Erkennung (pause_detector.py) |
 | `moviepy` | Video-Komposition (≥ 2.x) |
 | `Pillow` | Bild-Manipulation (Text-Panels) und DOCX-kompatible Frame-Aufbereitung |
 | `gTTS` | Text-to-Speech (Google TTS) |
-| `opencv-python` | Pause-Erkennung (pause_detector.py) |
-| `httpx` | Async HTTP (intern genutzt) |
+| `imageio` | Bildlesen/-schreiben (MoviePy-Backend) |
+| `imageio-ffmpeg` | FFmpeg-Backend für imageio |
+| `google-genai` | Gemini-API-Client |
+| `openai` | OpenAI- und Azure-OpenAI-Client |
 | `python-docx` | DOCX-Handbuch-Rendering |
 
 ---
@@ -226,7 +232,7 @@ npm run build:dist
 ```
 
 Erzeugt unter `dist/`:
-- `Clip2Guide Setup 0.1.0.exe` (NSIS-Installer)
+- `Clip2Guide Setup {version}.exe` (NSIS-Installer)
 
 ### Lokaler Test-Build (macOS)
 
@@ -235,7 +241,7 @@ npm run build:dist
 ```
 
 Erzeugt unter `dist/`:
-- `Clip2Guide-0.1.0.dmg` (DMG für aktuelle Architektur)
+- `Clip2Guide-{version}-arm64.pkg` (PKG-Installer für Apple Silicon)
 
 ### Plattformübergreifend via CI
 
