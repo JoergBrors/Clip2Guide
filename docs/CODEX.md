@@ -4,7 +4,7 @@ Dieses Dokument ist der **vollständige, maschinenlesbare Kontext** für automat
 Code-Änderungen (OpenAI Codex, GitHub Copilot Agent, etc.).
 Es beschreibt Dateistruktur, genaue Signaturen, Konventionen und Muster.
 
-> Stand: 2026-06-06 · Basis-Branch: `main`
+> Stand: 2026-06-06 · Basis-Branch: `main` · zuletzt geändert: 2026-06-06
 
 ---
 
@@ -91,9 +91,9 @@ Clip2Guide/
 │           └── create_tutorial.py        # Standalone-Renderer (MoviePy + gTTS + PIL)
 │
 ├── tools/
-│   ├── ffmpeg/bin/ffmpeg.exe
-│   ├── ffmpeg/bin/ffprobe.exe
-│   └── auto-editor/auto-editor-windows-x86_64.exe
+│   ├── ffmpeg/bin/ffmpeg[.exe]        # Windows: .exe; macOS/Linux: kein .exe
+│   ├── ffmpeg/bin/ffprobe[.exe]
+│   └── auto-editor/auto-editor-{platform}-{arch}[.exe]
 │
 ├── workspace/           # Laufzeit-Daten (nicht in Git)
 │   ├── uploads/
@@ -266,9 +266,10 @@ class Settings(BaseModel):
     azure_cognitive_api_version: str # AZURE_COGNITIVE_API_VERSION, default "2025-04-01-preview"
 
     # Tools (Path-Objekte, relativ zu PROJECT_ROOT aufgelöst)
-    ffmpeg_path: Path
-    ffprobe_path: Path
-    auto_editor_path: Path
+    # Defaults: plattformabhängig – .exe nur auf Windows, kein .exe auf macOS/Linux
+    ffmpeg_path: Path     # FFMPEG_PATH, default ./tools/ffmpeg/bin/ffmpeg[.exe]
+    ffprobe_path: Path    # FFPROBE_PATH, default ./tools/ffmpeg/bin/ffprobe[.exe]
+    auto_editor_path: Path  # AUTO_EDITOR_PATH, default ./tools/auto-editor/auto-editor-{platform}[.exe]
 
     # Workspace (Path-Objekte)
     workspace_root: Path
@@ -389,8 +390,9 @@ POST /api/videos/{video_id}/export-project       → dict (ZIP Export)
 GET  /api/videos/{video_id}/project/{filename}   → FileResponse (ZIP)
 POST /api/projects/import                        → dict (ZIP Import)
 POST /api/upload/images                          → ImageSetResponse
-POST /api/images/normalize                       → dict
-POST /api/images/{session_id}/to-frames          → dict
+     Akzeptiert: JPEG, PNG, WebP, BMP, HEIC, HEIF (HEIC/HEIF → JPEG-Konvertierung serverseitig)
+POST /api/images/normalize                       → NormalizeResponse
+POST /api/images/{session_id}/to-frames          → FrameStack
 ```
 
 ---
@@ -705,7 +707,11 @@ USER_LOCAL_DIR: string
 - **FFmpeg-Architektur-Check hart**: Nach dem Download prüft `file` die Binary. Ist sie NICHT arm64, werden die Dateien sofort gelöscht und das Setup bricht mit Fehler ab. Bestehendes FFmpeg mit falscher Architektur wird ebenfalls erkannt → Dateien löschen, klare Neu-Ausführungs-Anweisung.
 - **DebugPanel**: zeigt bei x86_64-FFmpeg auf arm64-Mac einen `diagHint` mit dem genauen `rm -rf`-Befehl und Anweisung zum Neu-Ausführen des Setups.
 - `create_tutorial.py`: `TemporaryDirectory(ignore_cleanup_errors=True)` → `TemporaryDirectory()` (Parameter erst ab 3.10, Skript läuft jetzt auf ≥ 3.10).
-- **pip-Install-Absicherung** (beide Skripte): `pip install -r requirements.txt` wird mit Exit-Code-Prüfung ausgeführt; bei Fehler bricht das Setup sofort ab. Nach dem Install werden alle kritischen Module explizit importiert (`fastapi`, `uvicorn`, `pydantic`, `cv2`, `moviepy`, `PIL`, `docx`); fehlt eines, wird es namentlich gemeldet und das Setup bricht ab. Der abschließende Selbsttest prüft ebenfalls `docx`.
+- **pip-Install-Absicherung** (beide Skripte): `pip install -r requirements.txt` wird mit Exit-Code-Prüfung ausgeführt; bei Fehler bricht das Setup sofort ab. Nach dem Install werden alle kritischen Module explizit importiert (`fastapi`, `uvicorn`, `pydantic`, `cv2`, `moviepy`, `PIL`, `docx`, `pillow_heif`); fehlt eines, wird es namentlich gemeldet und das Setup bricht ab. Der abschließende Selbsttest prüft ebenfalls `docx` und `pillow_heif`.
+- **Hash-basiertes Re-Install**: SHA256 der `requirements.txt` wird nach jedem erfolgreichen `pip install` in `backend/.venv/.requirements_hash` gespeichert. Beim nächsten Setup-Lauf wird der Hash verglichen – `pip install` wird nur ausgeführt wenn sich die Datei geändert hat oder die Hash-Datei fehlt. Neue Pakete werden dadurch beim nächsten App-Start automatisch nachinstalliert.
+- **Plattformabhängige Tool-Pfad-Defaults** (`config.py`): `ffmpeg_path`, `ffprobe_path` und `auto_editor_path` verwenden auf Windows `.exe`-Suffix, auf macOS/Linux keinen Suffix (`sys.platform == "win32"` Abfrage).
+- **macOS Font-Fallback** (`create_tutorial.py`): `_load_font()` prüft zuerst macOS-Systemfonts (`/System/Library/Fonts/HelveticaNeue.ttc`, `Helvetica.ttc`, `/Library/Fonts/Arial.ttf`) vor Windows- und Linux-Pfaden. `ImageFont.load_default(size)` ersetzt den parameterlosen Aufruf (Pillow ≥ 10.1, liefert skalierbare Schrift).
+- **HEIC/HEIF-Import**: `pillow-heif` in `requirements.txt`; `images.py` registriert `pillow_heif.register_heif_opener()` beim Modulstart. HEIC/HEIF-Uploads werden nach dem Speichern via Pillow zu JPEG konvertiert; das Original wird gelöscht. Frontend akzeptiert `image/heic`, `image/heif`, `.heic`, `.heif`.
 
 ### Startup-Cache-Bereinigung
 
@@ -745,5 +751,5 @@ USER_LOCAL_DIR: string
 | API-Keys | Electron setzt `APP_ENV_FILE` → `userData/.env` — nie im Installationsverzeichnis |
 | Renderer-Isolation | `nodeIntegration: false`, `contextIsolation: true`, `sandbox: true` |
 | IPC | Ausschließlich über `contextBridge` (preload.ts) |
-| Dateiformat | Upload-Router: Whitelist `.mp4 .mov .avi .mkv .webm` |
+| Dateiformat | Video-Upload: Whitelist `.mp4 .mov .avi .mkv .webm`; Bild-Upload: `.jpg .jpeg .png .webp .bmp .heic .heif` |
 | Path-Traversal | `frames.py` und `render.py`: `if "/" in filename or "\\" in filename or ".." in filename: raise 400` |

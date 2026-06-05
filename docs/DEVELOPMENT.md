@@ -161,6 +161,7 @@ Das Projekt verwendet **zwei separate** `tsconfig.json`-Dateien.
 | `google-genai` | Gemini-API-Client |
 | `openai` | OpenAI- und Azure-OpenAI-Client |
 | `python-docx` | DOCX-Handbuch-Rendering |
+| `pillow-heif` | HEIC/HEIF-Bildformat-Unterstützung (Apple-Fotos) |
 
 ---
 
