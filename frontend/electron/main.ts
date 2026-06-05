@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, session, shell } from "electron";
-import { spawn, spawnSync, ChildProcess } from "child_process";
+import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import * as crypto from "crypto";
@@ -37,10 +37,10 @@ let backendProcess: ChildProcess | null = null;
 
 /**
  * Prüft ob requirements.txt seit dem letzten pip install verändert wurde.
- * Wenn ja (oder Hash-Datei fehlt), führt pip install --upgrade -r ... aus.
- * Läuft synchron damit das Backend erst nach erfolgter Prüfung startet.
+ * Gibt { needed: true, reqPath, currentHash, venvPython } zurück wenn ein Update nötig ist,
+ * sonst { needed: false }.
  */
-function ensureRequirements(): void {
+function checkRequirementsHash(): { needed: false } | { needed: true; reqPath: string; currentHash: string; venvPython: string } {
   const isWindows = process.platform === "win32";
   const venvPython = path.join(
     USER_LOCAL_DIR, "backend", ".venv",
@@ -49,10 +49,9 @@ function ensureRequirements(): void {
 
   if (!fs.existsSync(venvPython)) {
     console.log("[requirements] venv nicht gefunden – Prüfung übersprungen");
-    return;
+    return { needed: false };
   }
 
-  // requirements.txt: im paketierten Modus in resources/, im Dev in backend/
   const resourcesRoot = app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "../../..");
   const reqCandidates = [
     path.join(resourcesRoot, "backend", "requirements.txt"),
@@ -61,10 +60,9 @@ function ensureRequirements(): void {
   const reqPath = reqCandidates.find((p) => fs.existsSync(p));
   if (!reqPath) {
     console.warn("[requirements] requirements.txt nicht gefunden – Prüfung übersprungen");
-    return;
+    return { needed: false };
   }
 
-  // SHA256 der requirements.txt berechnen
   const reqContent = fs.readFileSync(reqPath);
   const currentHash = crypto.createHash("sha256").update(reqContent).digest("hex");
 
@@ -74,26 +72,82 @@ function ensureRequirements(): void {
 
   if (currentHash === storedHash) {
     console.log("[requirements] requirements.txt unverändert – pip install übersprungen");
-    return;
+    return { needed: false };
   }
 
-  console.log("[requirements] requirements.txt geändert oder Erststart – installiere Module...");
-  console.log(`[requirements] requirements.txt: ${reqPath}`);
+  return { needed: true, reqPath, currentHash, venvPython };
+}
 
-  const pipArgs = ["-m", "pip", "install", "--upgrade", "-r", reqPath];
-  const result = spawnSync(venvPython, pipArgs, {
-    stdio: "inherit",
-    encoding: "utf8",
-    timeout: 5 * 60 * 1000,  // 5 Minuten max.
+/**
+ * Führt pip install aus und streamt Ausgabe als "update:log"-Events an ein BrowserWindow.
+ * Schickt am Ende "update:done" (success, errorMsg).
+ */
+function runPipInstall(
+  win: BrowserWindow,
+  venvPython: string,
+  reqPath: string,
+  currentHash: string,
+): void {
+  const send = (msg: string) => {
+    if (!win.isDestroyed()) win.webContents.send("update:log", msg);
+  };
+
+  send(`[requirements] Installiere Python-Module aus ${reqPath}...`);
+
+  const proc = spawn(venvPython, ["-m", "pip", "install", "--upgrade", "-r", reqPath], {
+    stdio: ["ignore", "pipe", "pipe"],
   });
 
-  if (result.status === 0) {
-    fs.writeFileSync(hashFile, currentHash, "utf8");
-    console.log("[requirements] Module erfolgreich installiert, Hash gespeichert");
+  proc.stdout?.on("data", (d: Buffer) =>
+    d.toString().split(/\r?\n/).filter(Boolean).forEach(send)
+  );
+  proc.stderr?.on("data", (d: Buffer) =>
+    d.toString().split(/\r?\n/).filter(Boolean).forEach(send)
+  );
+
+  proc.on("close", (code) => {
+    if (code === 0) {
+      const hashFile = path.join(USER_LOCAL_DIR, "backend", ".venv", ".requirements_hash");
+      fs.writeFileSync(hashFile, currentHash, "utf8");
+      send("[requirements] Module erfolgreich installiert.");
+      if (!win.isDestroyed()) win.webContents.send("update:done", true);
+    } else {
+      const msg = `pip install fehlgeschlagen (Exit-Code ${code})`;
+      send(`[requirements] FEHLER: ${msg}`);
+      if (!win.isDestroyed()) win.webContents.send("update:done", false, msg);
+    }
+  });
+
+  proc.on("error", (err) => {
+    send(`[requirements] Spawn-Fehler: ${err.message}`);
+    if (!win.isDestroyed()) win.webContents.send("update:done", false, err.message);
+  });
+}
+
+/** Öffnet das Update-Fenster, installiert Module, schließt es danach. */
+function createUpdateWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 640,
+    height: 440,
+    resizable: false,
+    title: "Clip2Guide – Module werden aktualisiert",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+
+  if (isDev) {
+    win.loadURL(`http://localhost:${VITE_PORT}?update=1`);
   } else {
-    console.error(`[requirements] pip install fehlgeschlagen (Exit-Code ${result.status})`);
-    // Kein harter Abbruch – Backend-Start versuchen, Fehler wird dort sichtbar
+    win.loadFile(
+      path.join(__dirname, "../../dist/renderer/index.html"),
+      { query: { update: "1" } }
+    );
   }
+  return win;
 }
 
 // ── Backend starten ──────────────────────────────────────────────────────────
@@ -233,15 +287,42 @@ app.whenReady().then(async () => {
     // Nach Setup-Abschluss: Wizard schließen, Backend starten, Hauptfenster öffnen
     ipcMain.once("setup:completed", () => {
       setupWin.close();
-      ensureRequirements();
-      startBackend();
-      setTimeout(() => createWindow(), 1500);
+      // Nach Setup immer pip install ausführen (Hash fehlt sowieso noch nicht)
+      const reqCheck = checkRequirementsHash();
+      if (reqCheck.needed) {
+        const updateWin = createUpdateWindow();
+        updateWin.webContents.once("did-finish-load", () => {
+          runPipInstall(updateWin, reqCheck.venvPython, reqCheck.reqPath, reqCheck.currentHash);
+        });
+        ipcMain.once("update:close", () => {
+          updateWin.close();
+          startBackend();
+          setTimeout(() => createWindow(), 1500);
+        });
+      } else {
+        startBackend();
+        setTimeout(() => createWindow(), 1500);
+      }
     });
   } else {
-    ensureRequirements();
-    startBackend();
-    // Kurz warten bis Backend bereit ist
-    setTimeout(() => createWindow(), 1500);
+    const reqCheck = checkRequirementsHash();
+    if (reqCheck.needed) {
+      const updateWin = createUpdateWindow();
+      // Warten bis Renderer bereit ist, dann pip install starten
+      updateWin.webContents.once("did-finish-load", () => {
+        runPipInstall(updateWin, reqCheck.venvPython, reqCheck.reqPath, reqCheck.currentHash);
+      });
+      // Nach Abschluss (Erfolg oder Fehler): Update-Fenster schließen, weiter
+      ipcMain.once("update:close", () => {
+        updateWin.close();
+        startBackend();
+        setTimeout(() => createWindow(), 1500);
+      });
+    } else {
+      startBackend();
+      // Kurz warten bis Backend bereit ist
+      setTimeout(() => createWindow(), 1500);
+    }
   }
 
   app.on("activate", () => {

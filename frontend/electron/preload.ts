@@ -51,6 +51,24 @@ contextBridge.exposeInMainWorld("setupAPI", {
   },
 });
 
+/** Update-API – Requirements-Update-Fenster */
+contextBridge.exposeInMainWorld("updateAPI", {
+  onLog: (callback: (msg: string) => void): (() => void) => {
+    const listener = (_: Electron.IpcRendererEvent, msg: string) => callback(msg);
+    ipcRenderer.on("update:log", listener);
+    return () => ipcRenderer.removeListener("update:log", listener);
+  },
+  onDone: (callback: (success: boolean, error?: string) => void): (() => void) => {
+    const listener = (_: Electron.IpcRendererEvent, success: boolean, error?: string) =>
+      callback(success, error);
+    ipcRenderer.on("update:done", listener);
+    return () => ipcRenderer.removeListener("update:done", listener);
+  },
+  close: (): void => {
+    ipcRenderer.send("update:close");
+  },
+});
+
 /** Uninstall-API */
 contextBridge.exposeInMainWorld("appAPI", {
   uninstall: (deleteUserData: boolean): Promise<{ confirmed: boolean }> =>

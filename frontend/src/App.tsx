@@ -6,6 +6,7 @@ import FrameStack from "./components/FrameStack";
 import SceneEditor from "./components/SceneEditor";
 import RenderPanel from "./components/RenderPanel";
 import SetupWizard from "./components/SetupWizard";
+import UpdateWindow from "./components/UpdateWindow";
 import SettingsPanel from "./components/SettingsPanel";
 import DebugPanel from "./components/DebugPanel";
 import type { ImageInfo, StoryboardDraftHints } from "./api/backendClient";
@@ -47,6 +48,12 @@ export default function App(): React.ReactElement {
   const [draftHints, setDraftHints] = useState<StoryboardDraftHints | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
+
+  // Update-Fenster: URL-Parameter ?update=1 → Requirements-Install-Fortschritt zeigen.
+  const isUpdateMode = new URLSearchParams(window.location.search).get("update") === "1";
+  if (isUpdateMode) {
+    return <UpdateWindow />;
+  }
 
   // Setup-Wizard: URL-Parameter ?setup=1 signalisiert, dass das Einrichtungsfenster aktiv ist.
   const isSetupMode = new URLSearchParams(window.location.search).get("setup") === "1";
