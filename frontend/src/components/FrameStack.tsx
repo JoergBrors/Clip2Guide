@@ -6,7 +6,7 @@ import FrameEditor from "./FrameEditor";
 
 interface Props {
   videoId: string;
-  onDone: (selectedFrames: string[]) => void;
+  onDone: (selectedFrames: string[], sceneGroups: string[][]) => void;
   disableExtract?: boolean;
 }
 
@@ -37,6 +37,8 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
   // Drag-Zustand für das Szenenraster
   const [sceneDragInfo, setSceneDragInfo] = useState<{ sceneIdx: number; frameIdx: number } | null>(null);
   const [sceneDragOver, setSceneDragOver] = useState<{ sceneIdx: number; frameIdx: number } | null>(null);
+  // Cross-Szenen-Drag (welche Szenen-Karte ist Ziel)
+  const [sceneCrossDragOver, setSceneCrossDragOver] = useState<number | null>(null);
 
   // Upload eigener Bilder
   const [uploading, setUploading] = useState(false);
@@ -154,6 +156,55 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
     setLocalSceneFrames(new Map(localSceneFrames).set(sceneIdx, next));
   }
 
+  // ── Szenen-Gruppen-Operationen ─────────────────────────────────────────────
+
+  function moveFrameBetweenScenes(fromKey: number, toKey: number, filename: string) {
+    const fromFrames = localSceneFrames.get(fromKey) ?? [];
+    const toFrames = localSceneFrames.get(toKey) ?? [];
+    const frame = fromFrames.find((f) => f.filename === filename);
+    if (!frame) return;
+    const newFrom = fromFrames.filter((f) => f.filename !== filename);
+    const newTo = [...toFrames, frame];
+    const allEntries = Array.from(localSceneFrames.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([key, frames]) => {
+        if (key === fromKey) return [key, newFrom] as [number, FrameInfo[]];
+        if (key === toKey) return [key, newTo] as [number, FrameInfo[]];
+        return [key, frames] as [number, FrameInfo[]];
+      })
+      .filter(([, frames]) => frames.length > 0);
+    setLocalSceneFrames(new Map(allEntries.map(([, frames], i) => [i, frames] as [number, FrameInfo[]])));
+  }
+
+  function splitSceneAt(sceneKey: number, frameIdx: number) {
+    const allEntries = Array.from(localSceneFrames.entries()).sort((a, b) => a[0] - b[0]);
+    const newEntries: [number, FrameInfo[]][] = [];
+    let newIdx = 0;
+    for (const [key, frames] of allEntries) {
+      if (key === sceneKey && frameIdx > 0 && frameIdx < frames.length) {
+        newEntries.push([newIdx++, frames.slice(0, frameIdx)]);
+        newEntries.push([newIdx++, frames.slice(frameIdx)]);
+      } else {
+        newEntries.push([newIdx++, frames]);
+      }
+    }
+    setLocalSceneFrames(new Map(newEntries));
+  }
+
+  function mergeWithNext(sceneKey: number) {
+    const allEntries = Array.from(localSceneFrames.entries()).sort((a, b) => a[0] - b[0]);
+    const keyPos = allEntries.findIndex(([k]) => k === sceneKey);
+    if (keyPos < 0 || keyPos >= allEntries.length - 1) return;
+    const [, curFrames] = allEntries[keyPos];
+    const [, nextFrames] = allEntries[keyPos + 1];
+    const merged = [...curFrames, ...nextFrames];
+    const filtered = allEntries.filter((_, i) => i !== keyPos + 1);
+    const newEntries: [number, FrameInfo[]][] = filtered.map(([, frames], i) =>
+      [i, i === keyPos ? merged : frames] as [number, FrameInfo[]]
+    );
+    setLocalSceneFrames(new Map(newEntries));
+  }
+
   // ── Frame-Editor ──────────────────────────────────────────────────────────
 
   async function handleFrameEditSave(dataUrl: string) {
@@ -269,10 +320,19 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
               <button
                 className="btn btn-success"
                 onClick={() => {
-                  const frames = customFrames.length > 0
-                    ? customFrames.map((f) => f.filename)
-                    : [];
-                  onDone(frames);
+                  const sortedEntries = Array.from(scenes.entries()).sort((a, b) => a[0] - b[0]);
+                  if (customFrames.length > 0) {
+                    const customSet = new Set(customFrames.map((f) => f.filename));
+                    const sceneGroups = sortedEntries
+                      .map(([, frames]) =>
+                        frames.filter((f) => customSet.has(f.filename)).map((f) => f.filename)
+                      )
+                      .filter((g) => g.length > 0);
+                    onDone(customFrames.map((f) => f.filename), sceneGroups);
+                  } else {
+                    const sceneGroups = sortedEntries.map(([, frames]) => frames.map((f) => f.filename));
+                    onDone(sceneGroups.flat(), sceneGroups);
+                  }
                 }}
                 style={{ marginLeft: "auto" }}
               >
@@ -363,7 +423,31 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
             const selectedInScene = frames.filter((f) => customFilenames.has(f.filename)).length;
 
             return (
-              <div key={sceneIdx} className="card" style={{ marginBottom: 12 }}>
+              <div
+                key={sceneIdx}
+                className="card"
+                style={{ marginBottom: 12, border: sceneCrossDragOver === sceneIdx ? "2px dashed #4fc3f7" : "1px solid #2a2a4a", transition: "border 0.15s" }}
+                onDragOver={(e) => {
+                  if (sceneDragInfo && sceneDragInfo.sceneIdx !== sceneIdx) {
+                    e.preventDefault();
+                    setSceneCrossDragOver(sceneIdx);
+                  }
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) setSceneCrossDragOver(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setSceneCrossDragOver(null);
+                  if (sceneDragInfo && sceneDragInfo.sceneIdx !== sceneIdx) {
+                    const srcFrames = localSceneFrames.get(sceneDragInfo.sceneIdx) ?? [];
+                    const fn = srcFrames[sceneDragInfo.frameIdx]?.filename;
+                    if (fn) moveFrameBetweenScenes(sceneDragInfo.sceneIdx, sceneIdx, fn);
+                    setSceneDragInfo(null);
+                    setSceneDragOver(null);
+                  }
+                }}
+              >
                 <div style={{ display: "flex", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
                   <h3 style={{ margin: 0, color: "#90caf9", fontSize: 15 }}>Szene {sceneIdx + 1}</h3>
                   <span style={{ color: "#666", fontSize: 12 }}>{frames.length} Frames</span>
@@ -408,6 +492,17 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                   >
                     {selectedScene === sceneIdx ? "Schliessen" : "Carousel"}
                   </button>
+                  {/* Szene mit nächster zusammenfügen */}
+                  {Array.from(scenes.keys()).sort((a, b) => a - b).indexOf(sceneIdx) < scenes.size - 1 && (
+                    <button
+                      className="btn btn-ghost"
+                      style={{ padding: "4px 8px", fontSize: 11, color: "#90caf9" }}
+                      title="Mit nächster Szene zusammenfügen"
+                      onClick={() => mergeWithNext(sceneIdx)}
+                    >
+                      ⊔ Zusammenfügen
+                    </button>
+                  )}
                 </div>
 
                 {/* Thumbnail-Raster */}
@@ -485,8 +580,28 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                           }}
                         >
                           ✏
-                        </div>
-
+                        </div>                        {/* Szene hier teilen (nicht beim ersten Frame) */}
+                        {actualIdx > 0 && (
+                          <div
+                            onClick={(e) => { e.stopPropagation(); splitSceneAt(sceneIdx, actualIdx); }}
+                            title="Szene hier teilen – ab diesem Bild neue Szene"
+                            style={{
+                              position: "absolute",
+                              top: 2,
+                              left: 2,
+                              background: "rgba(21,101,192,0.88)",
+                              color: "#c8e6ff",
+                              borderRadius: 3,
+                              fontSize: 9,
+                              padding: "1px 4px",
+                              cursor: "pointer",
+                              userSelect: "none",
+                              lineHeight: 1.3,
+                            }}
+                          >
+                            \u2702
+                          </div>
+                        )}
                         {/* Hover-Zoom Popup */}
                         {isHovered && (
                           <div

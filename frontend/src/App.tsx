@@ -42,6 +42,7 @@ export default function App(): React.ReactElement {
   const [step, setStep] = useState<Step>("upload");
   const [project, setProject] = useState<ProjectState | null>(null);
   const [selectedFrames, setSelectedFrames] = useState<string[]>([]);
+  const [sceneGroups, setSceneGroups] = useState<string[][] | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Setup-Wizard: URL-Parameter ?setup=1 signalisiert, dass das Einrichtungsfenster aktiv ist.
@@ -87,13 +88,15 @@ export default function App(): React.ReactElement {
     setStep("frames");
   }
 
-  function handleFramesDone(frames: string[]) {
+  function handleFramesDone(frames: string[], groups: string[][]) {
     setSelectedFrames(frames);
+    setSceneGroups(groups.length > 0 ? groups : null);
     setStep("storyboard");
   }
 
-  function handleImageFramesDone(frames: string[]) {
+  function handleImageFramesDone(frames: string[], groups: string[][]) {
     setSelectedFrames(frames);
+    setSceneGroups(groups.length > 0 ? groups : null);
     setStep("storyboard");
   }
 
@@ -184,6 +187,7 @@ export default function App(): React.ReactElement {
           <SceneEditor
             videoId={project.videoId}
             selectedFrames={selectedFrames}
+            sceneGroups={sceneGroups}
             onDone={handleStoryboardDone}
           />
         )}
@@ -191,6 +195,7 @@ export default function App(): React.ReactElement {
           <SceneEditor
             videoId={project.videoId}
             selectedFrames={selectedFrames}
+            sceneGroups={sceneGroups}
             onDone={handleStoryboardDone}
           />
         )}

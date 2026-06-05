@@ -13,7 +13,7 @@ from app import job_store
 from app.config import settings
 from app.models import AnalyzeRequest, AiProvider, EnrichRequest, JobStartResponse, RewriteSceneRequest, StoryboardJson, StoryboardUpdateRequest
 from app.services.frame_stack_service import FrameStackService
-from app.services.storyboard_service import StoryboardService, build_enrich_prompt
+from app.services.storyboard_service import StoryboardService, build_analysis_prompt, build_enrich_prompt
 
 router = APIRouter()
 _stack_svc = FrameStackService()
@@ -26,6 +26,40 @@ async def _send(job_id: str, type_: str, step: str, message: str, percent: int =
         "percent": percent, **({"data": data} if data else {}),
     })
 
+async def _call_with_retry(job_id: str, step: str, fn, base_percent: int, *args):
+    """Fuehrt fn(*args) in einem Thread-Executor aus.
+
+    Bei Throttling (503/429) wird der Aufruf automatisch mit Exponential-Backoff
+    wiederholt (Anzahl, Wartezeit und Faktor kommen aus den Settings).
+    Waehrenddessen werden Countdown-Progress-Events gesendet.
+    Nach Erschoepfen aller Versuche wird die letzte Exception re-raised.
+    """
+    loop = asyncio.get_event_loop()
+    max_attempts = max(1, settings.ai_retry_max_attempts + 1)  # +1 = erster Versuch
+    delay = settings.ai_retry_initial_delay
+    last_exc: Exception | None = None
+
+    for attempt in range(max_attempts):
+        try:
+            return await loop.run_in_executor(None, fn, *args)
+        except Exception as exc:
+            last_exc = exc
+            if not _is_throttle_error(exc):
+                raise  # Nicht-Throttle-Fehler sofort weiterleiten
+            retry_left = max_attempts - attempt - 1
+            if retry_left <= 0:
+                break  # alle Versuche aufgebraucht
+            wait = min(delay, settings.ai_retry_max_delay)
+            for remaining in range(int(wait), 0, -1):
+                await _send(
+                    job_id, "progress", step,
+                    f"Modell überlastet – Retry {attempt + 1}/{max_attempts - 1} in {remaining}s ...",
+                    base_percent,
+                )
+                await asyncio.sleep(1)
+            delay = min(delay * settings.ai_retry_backoff_factor, settings.ai_retry_max_delay)
+
+    raise last_exc  # type: ignore[misc]
 
 # ── Verfuegbare Modelle ────────────────────────────────────────────────────────
 
@@ -250,13 +284,74 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
         if not frame_paths:
             raise FileNotFoundError(f"Keine Frames gefunden fuer {video_id}")
 
-        await _send(job_id, "progress", "analyze", f"Analysiere {len(frame_paths)} Frames...", 20)
-
         provider = _get_provider(req)
+        provider_name = req.ai_provider.value if req.ai_provider else settings.ai_provider
+        model_name = _get_effective_model(provider_name, req.ai_model)
 
-        storyboard: StoryboardJson = await loop.run_in_executor(
-            None, provider.analyze_frames, frame_paths, req.languages, video_id
-        )
+        if req.scene_groups:
+            # ── Nutzer-definierte Szenen-Gruppen: KI einmal pro Gruppe aufrufen ──────────
+            all_frame_map = {p.name: p for p in frame_paths}
+            scenes_result = []
+            total_groups = len(req.scene_groups)
+            await _send(job_id, "progress", "analyze",
+                        f"Nutzer-Gruppierung: {total_groups} Szene(n) werden separat analysiert...", 10)
+
+            for g_idx, group_filenames in enumerate(req.scene_groups):
+                pct_base = 15 + int(70 * g_idx / max(total_groups, 1))
+                scene_id = f"scene_{g_idx + 1:03d}"
+                group_paths = [all_frame_map[fn] for fn in group_filenames if fn in all_frame_map]
+                if not group_paths:
+                    continue
+                await _send(job_id, "progress", "analyze",
+                            f"Szene {g_idx + 1}/{total_groups}: {len(group_paths)} Bilder...", pct_base)
+                prompt_extra = (
+                    f"Erstelle genau EINE Szene mit scene_id '{scene_id}'. "
+                    "Alle gezeigten Bilder gehoeren zusammen zu dieser einen Szene."
+                )
+                sys_prompt = build_analysis_prompt(req.languages, video_id, prompt_extra, len(group_paths))
+                await _send(job_id, "debug", "analyze",
+                            f"[Szene {g_idx + 1}/{total_groups}]  Provider: {provider_name} / {model_name}\n"
+                            f"Frames: {[p.name for p in group_paths]}\n\n"
+                            f"--- Prompt ---\n{sys_prompt}",
+                            pct_base,
+                            {"prompt": sys_prompt, "scene_id": scene_id})
+                group_sb = await _call_with_retry(
+                    job_id, "analyze",
+                    provider.analyze_frames, pct_base,
+                    group_paths, req.languages, video_id, prompt_extra,
+                )
+                if group_sb.scenes:
+                    s = group_sb.scenes[0]
+                    s.scene_id = scene_id
+                    s.image_group = [fn for fn in group_filenames if fn in all_frame_map]
+                    if s.image_group:
+                        s.start_frame = s.image_group[0]
+                        s.end_frame = s.image_group[-1] if len(s.image_group) > 1 else None
+                    scenes_result.append(s)
+
+            storyboard = StoryboardJson(
+                video_id=video_id,
+                source_video="",
+                cut_video=None,
+                languages=req.languages,
+                scenes=scenes_result,
+                metadata={},
+            )
+        else:
+            # ── Standard: KI erkennt Szenen selbst ───────────────────────────────────────
+            await _send(job_id, "progress", "analyze", f"Analysiere {len(frame_paths)} Frames...", 20)
+            sys_prompt = build_analysis_prompt(req.languages, video_id, "", len(frame_paths))
+            await _send(job_id, "debug", "analyze",
+                        f"Provider: {provider_name} / {model_name}\n"
+                        f"Frames gesamt: {len(frame_paths)}\n\n"
+                        f"--- System-Prompt ---\n{sys_prompt}",
+                        20,
+                        {"prompt": sys_prompt, "frame_count": len(frame_paths)})
+            storyboard = await _call_with_retry(
+                job_id, "analyze",
+                provider.analyze_frames, 20,
+                frame_paths, req.languages, video_id,
+            )
 
         # Quellvideo eintragen
         cut_path = settings.cut_dir / f"{video_id}.mp4"
@@ -364,13 +459,38 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
             if len(lines) > 1:
                 image_prompt_hint = "\n".join(lines)
 
+        duration_hint = ""
+        if req.duration_seconds and req.duration_seconds > 0:
+            words = max(5, int(req.duration_seconds * 130 / 60))
+            duration_hint = (
+                f"Die Szene soll {req.duration_seconds:.1f} Sekunden lang sein. "
+                f"Passe die Laenge der speaker_notes entsprechend an – "
+                f"schreibe ca. {words} Woerter pro Sprache "
+                f"(bei ca. 130 Woertern pro Minute Sprechgeschwindigkeit). "
+                f"Halte heading und body ebenfalls praegnant und zum Umfang passend."
+            )
+
         prompt_extra = "\n\n".join(filter(None, [
             f"Hinweis: Diese Frames gehoeren alle zu EINER zusammenhaengenden Szene. "
             f"Erstelle genau eine Szene mit scene_id '{req.scene_id}'.",
             frame_order_hint,
+            duration_hint,
             image_prompt_hint,
             user_text_hint,
         ]))
+
+        # Debug-Event: Prompt-Details an den Client senden
+        _pname = req.ai_provider.value if req.ai_provider else settings.ai_provider
+        _mname = _get_effective_model(_pname, req.ai_model)
+        await _send(job_id, "debug", "rewrite",
+                    f"Provider: {_pname} / {_mname}\n"
+                    f"Szene: {req.scene_id}\n"
+                    f"Frames ({len(frame_paths)}): {[p.name for p in frame_paths]}\n\n"
+                    f"--- Prompt-Extra ---\n{prompt_extra}",
+                    30,
+                    {"prompt_extra": prompt_extra, "scene_id": req.scene_id,
+                     "provider": _pname, "model": _mname})
+
         analyze_req = AnalyzeRequest(
             video_id=video_id,
             languages=req.languages,
@@ -378,8 +498,10 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
             ai_model=req.ai_model,
         )
         provider = _get_provider(analyze_req)
-        storyboard = await loop.run_in_executor(
-            None, provider.analyze_frames, frame_paths, req.languages, video_id, prompt_extra
+        storyboard = await _call_with_retry(
+            job_id, "rewrite",
+            provider.analyze_frames, 30,
+            frame_paths, req.languages, video_id, prompt_extra,
         )
 
         if not storyboard.scenes:
@@ -475,11 +597,12 @@ async def _run_enrich(video_id: str, job_id: str, req: EnrichRequest) -> None:
                         pct)
 
             prompt = build_enrich_prompt(scene, languages, frames_dir)
-            # Provider mit Text-only-Prompt aufrufen (kein Bild nötig – Texte liegen bereits vor)
+            # Provider mit Text-only-Prompt aufrufen – mit automatischem Retry bei Throttling
             try:
-                raw = await loop.run_in_executor(
-                    None,
-                    lambda p=prompt: provider.complete_text(p)
+                raw = await _call_with_retry(
+                    job_id, "enrich",
+                    provider.complete_text, pct,
+                    prompt,
                 )
             except Exception as call_exc:
                 await _send(job_id, "progress", "enrich",

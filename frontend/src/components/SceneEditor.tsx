@@ -1,16 +1,17 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api, StoryboardJson, Scene, TextPanel, subscribeToJob, JobEvent, ThrottleAlternative } from "../api/backendClient";
 import JsonPreview from "./JsonPreview";
 
 interface Props {
   videoId: string;
   selectedFrames?: string[];
+  sceneGroups?: string[][] | null;
   onDone: () => void;
 }
 
 const DEFAULT_LANGUAGES = ["de", "en"];
 
-export default function SceneEditor({ videoId, selectedFrames, onDone }: Props): React.ReactElement {
+export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDone }: Props): React.ReactElement {
   const [storyboard, setStoryboard] = useState<StoryboardJson | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeMsg, setAnalyzeMsg] = useState("");
@@ -25,6 +26,14 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
 
   // Hover-Zoom-Vorschau
   const [hoveredImg, setHoveredImg] = useState<{ src: string; x: number; y: number } | null>(null);
+
+  // Debug-Protokoll (KI-Prompts)
+  const [debugLogs, setDebugLogs] = useState<Array<{ ts: string; step: string; content: string }>>([]);
+  const [showDebug, setShowDebug] = useState(false);
+
+  function addDebugLog(step: string, content: string) {
+    setDebugLogs((prev) => [...prev.slice(-199), { ts: new Date().toLocaleTimeString(), step, content }]);
+  }
 
   // Drag-and-Drop: Bild zwischen Szenen verschieben (fromScene = null → aus Referenz-Streifen)
   const [dragInfo, setDragInfo] = useState<{ filename: string; fromScene: number | null } | null>(null);
@@ -52,10 +61,53 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
   const [rewritingScene, setRewritingScene] = useState(false);
   const [rewriteMsg, setRewriteMsg] = useState("");
   const [rewriteProgress, setRewriteProgress] = useState(0);
+  // Szenen-IDs die nach einem Rewrite nicht automatisch angereichert werden sollen
+  const [rewrittenSceneIds, setRewrittenSceneIds] = useState<Set<string>>(new Set());
+  // Timer-Refs fuer debounced Auto-Rewrite (sceneId -> timer)
+  const autoRewriteTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   // Anreicherung (slide_panels + render_hints)
   const [enriching, setEnriching] = useState(false);
   const [enrichMsg, setEnrichMsg] = useState("");
+  // Separates Flag fuer den Post-Rewrite-Enrich (laeuft unabhaengig vom allgemeinen Enrich)
+  const [enrichingAfterRewrite, setEnrichingAfterRewrite] = useState(false);
+
+  // Referenz: Bildgruppen wie sie zuletzt vom Server geladen/gespeichert wurden (fuer Aenderungs-Erkennung)
+  const serverImageGroupsRef = useRef<Record<string, string[]>>({});
+
+  function syncServerImageGroups(sb: StoryboardJson) {
+    serverImageGroupsRef.current = Object.fromEntries(
+      sb.scenes.map((s) => [s.scene_id, [...s.image_group]])
+    );
+  }
+
+  function imagesChangedVsServer(sceneId: string, currentGroup: string[]): boolean {
+    const server = serverImageGroupsRef.current[sceneId];
+    if (!server) return true; // noch nicht vom Server bekannt → als geändert behandeln
+    if (server.length !== currentGroup.length) return true;
+    return server.some((f, i) => f !== currentGroup[i]);
+  }
+
+  /**
+   * Plant einen Auto-Rewrite fuer eine oder mehrere Szenen (debounced 500 ms).
+   * Wird nach jeder Bild-Mutation aufgerufen.
+   * sbSnapshot: das bereits aktualisierte Storyboard (nicht den veralteten React-State verwenden)
+   * sceneIndices: Indizes der betroffenen Szenen
+   */
+  function scheduleAutoRewrite(sbSnapshot: StoryboardJson, sceneIndices: number[]) {
+    sceneIndices.forEach((idx) => {
+      const sceneId = sbSnapshot.scenes[idx]?.scene_id;
+      if (!sceneId) return;
+      // Laufenden Timer für diese Szene löschen
+      if (autoRewriteTimersRef.current[sceneId]) {
+        clearTimeout(autoRewriteTimersRef.current[sceneId]);
+      }
+      autoRewriteTimersRef.current[sceneId] = setTimeout(() => {
+        delete autoRewriteTimersRef.current[sceneId];
+        runRewriteScene(undefined, undefined, sbSnapshot, idx);
+      }, 500);
+    });
+  }
 
   // Throttle-Dialog: wird gesetzt wenn ein KI-Anbieter 503/429 zurueckgibt
   const [throttleDialog, setThrottleDialog] = useState<{
@@ -103,7 +155,7 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
 
   useEffect(() => {
     api.getStoryboard(videoId)
-      .then(setStoryboard)
+      .then((sb) => { setStoryboard(sb); syncServerImageGroups(sb); })
       .catch(() => { /* noch nicht erstellt */ });
   }, [videoId]);
 
@@ -114,14 +166,20 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     const activeProvider = providerOverride ?? provider;
     const activeModel = (modelOverride ?? selectedModel) || undefined;
     try {
-      const { job_id } = await api.analyzeVideo(videoId, languages, activeProvider, activeModel, selectedFrames?.length ? selectedFrames : undefined);
+      const { job_id } = await api.analyzeVideo(
+        videoId, languages, activeProvider, activeModel,
+        selectedFrames?.length ? selectedFrames : undefined,
+        sceneGroups?.length ? sceneGroups : undefined,
+      );
       subscribeToJob(job_id, (ev: JobEvent) => {
+        if (ev.type === "debug") { addDebugLog(ev.step, ev.message); return; }
         setAnalyzeMsg(ev.message);
         setAnalyzeProgress(ev.percent);
         if (ev.type === "completed") {
           setAnalyzing(false);
           api.getStoryboard(videoId).then((sb) => {
             setStoryboard(sb);
+            syncServerImageGroups(sb);
             // Nach der Analyse automatisch Szenen mit mehreren Bildern anreichern
             const langs = sb.languages.length ? sb.languages : languages;
             const multiImgScenes = sb.scenes.filter((s) => s.image_group.length > 1);
@@ -172,6 +230,7 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     if (s.end_frame === filename) s.end_frame = s.image_group[s.image_group.length - 1] ?? null;
     updated.scenes[sceneIdx] = s;
     setStoryboard(updated);
+    if (s.image_group.length > 0) scheduleAutoRewrite(updated, [sceneIdx]);
   }
 
   function moveFrameToScene(fromIdx: number, toIdx: number, filename: string) {
@@ -184,6 +243,10 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     to.image_group = [...to.image_group, filename];
     updated.scenes[toIdx] = to;
     setStoryboard(updated);
+    // Beide betroffenen Szenen neu schreiben (Quell-Szene verliert ein Bild, Ziel-Szene bekommt eines)
+    const affected = [toIdx];
+    if (from.image_group.length > 0) affected.push(fromIdx);
+    scheduleAutoRewrite(updated, affected);
   }
 
   function addFrameFromRef(filename: string, toIdx: number) {
@@ -206,6 +269,12 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     }
     updated.scenes[toIdx] = to;
     setStoryboard(updated);
+    // Ziel-Szene neu schreiben; ggf. auch alle Quell-Szenen die ein Bild verloren haben
+    const affectedSrcIndices = storyboard.scenes
+      .map((s, i) => (i !== toIdx && s.image_group.includes(filename) ? i : -1))
+      .filter((i) => i >= 0);
+    const affected = [toIdx, ...affectedSrcIndices];
+    scheduleAutoRewrite(updated, affected);
   }
 
   function reorderWithinScene(sceneIdx: number, fromFilename: string, beforeFilename: string | null) {
@@ -220,6 +289,7 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     s.end_frame = group[group.length - 1] ?? null;
     updated.scenes[sceneIdx] = s;
     setStoryboard(updated);
+    scheduleAutoRewrite(updated, [sceneIdx]);
   }
 
   function addScene() {
@@ -320,8 +390,16 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     setDragInfo(null);
   }
 
-  async function runRewriteScene(providerOverride?: string, modelOverride?: string) {
-    if (!storyboard || !scene) return;
+  async function runRewriteScene(
+    providerOverride?: string,
+    modelOverride?: string,
+    sbOverride?: StoryboardJson,   // direkt nach Bild-Mutation übergeben (kein Stale-State)
+    sceneIdxOverride?: number,     // Szenen-Index des sbOverride
+  ) {
+    const sb = sbOverride ?? storyboard;
+    const sceneIdx = sceneIdxOverride ?? activeScene;
+    const scn = sb?.scenes[sceneIdx];
+    if (!sb || !scn) return;
     setRewritingScene(true);
     setRewriteMsg("");
     setRewriteProgress(0);
@@ -330,34 +408,46 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     const activeProvider = providerOverride ?? provider;
     const activeModel = (modelOverride ?? selectedModel) || undefined;
     try {
-      const langs = storyboard.languages.length ? storyboard.languages : languages;
-      // Aktuelle Nutzer-Texte mitschicken damit die KI sie berücksichtigt
-      const currentTexts = scene.texts
-        ? Object.fromEntries(
-            Object.entries(scene.texts).map(([lang, tp]) => [
-              lang,
-              { heading: tp.heading, body: tp.body, speaker_notes: tp.speaker_notes },
-            ])
-          )
-        : undefined;
-      const imagePrompts = scene.image_prompts
-        ? Object.fromEntries(Object.entries(scene.image_prompts).filter(([, v]) => v && v.trim()))
+      const langs = sb.languages.length ? sb.languages : languages;
+      // Immer frischer Inhalt – KI soll Bilder und image_prompts frei interpretieren
+      const imagePrompts = scn.image_prompts
+        ? Object.fromEntries(Object.entries(scn.image_prompts).filter(([, v]) => v && v.trim()))
         : undefined;
       const { job_id } = await api.rewriteScene(
-        videoId, scene.scene_id, scene.image_group, langs,
-        currentTexts, Object.keys(imagePrompts ?? {}).length ? imagePrompts : undefined,
-        activeProvider, activeModel
+        videoId, scn.scene_id, scn.image_group, langs,
+        undefined,  // current_texts: niemals senden – würde KI auf bestehenden Text fixieren
+        Object.keys(imagePrompts ?? {}).length ? imagePrompts : undefined,
+        activeProvider, activeModel,
+        scn.duration_seconds ?? undefined,
       );
+      const sceneIdForEnrich = scn.scene_id;
+      const capturedSceneIdx = sceneIdx;
       subscribeToJob(job_id, (ev: JobEvent) => {
+        if (ev.type === "debug") { addDebugLog(ev.step, ev.message); return; }
         setRewriteMsg(ev.message);
         setRewriteProgress(ev.percent);
         if (ev.type === "completed" && ev.data) {
           setRewritingScene(false);
           const texts = ev.data.texts as Record<string, TextPanel>;
-          const updated = { ...storyboard, scenes: [...storyboard.scenes] };
-          const s = { ...updated.scenes[activeScene], texts: { ...updated.scenes[activeScene].texts, ...texts } };
-          updated.scenes[activeScene] = s;
-          setStoryboard(updated);
+          // Funktionaler State-Update: immer aktuellsten State nehmen (kein Stale-Closure-Problem)
+          setStoryboard((prev) => {
+            if (!prev) return prev;
+            const scenes = [...prev.scenes];
+            const s = { ...scenes[capturedSceneIdx], texts: { ...scenes[capturedSceneIdx].texts, ...texts } };
+            scenes[capturedSceneIdx] = s;
+            const updated = { ...prev, scenes };
+            // Szene als neu geschrieben markieren → kein doppelter Auto-Enrich beim manuellen Speichern
+            setRewrittenSceneIds((rw) => new Set([...rw, sceneIdForEnrich]));
+            // Storyboard sofort speichern, dann Enrich für slide_panels/render_hints
+            const enrichLangs = updated.languages.length ? updated.languages : langs;
+            api.updateStoryboard(videoId, updated)
+              .then(() => {
+                syncServerImageGroups(updated);
+                triggerEnrichForScene(sceneIdForEnrich, enrichLangs);
+              })
+              .catch(console.error);
+            return updated;
+          });
         } else if (ev.type === "throttled") {
           setRewritingScene(false);
           const alts = (ev.data?.alternatives ?? []) as ThrottleAlternative[];
@@ -378,10 +468,12 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     setSaving(true);
     try {
       await api.updateStoryboard(videoId, storyboard);
+      syncServerImageGroups(storyboard);
       // Im Hintergrund Szenen anreichern die mehrere Bilder haben und noch keine slide_panels
+      // Szenen die gerade per KI-Rewrite neu geschrieben wurden ausnehmen (Post-Rewrite-Enrich läuft bereits)
       const langs = storyboard.languages.length ? storyboard.languages : languages;
       const needEnrich = storyboard.scenes.filter(
-        (s) => s.image_group.length > 1 && !s.slide_panels?.[langs[0]]?.length
+        (s) => s.image_group.length > 1 && !s.slide_panels?.[langs[0]]?.length && !rewrittenSceneIds.has(s.scene_id)
       );
       if (needEnrich.length > 0) {
         triggerEnrich(langs, needEnrich.map((s) => s.scene_id));
@@ -391,6 +483,34 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
     } finally {
       setSaving(false);
     }
+  }
+
+  function triggerEnrichForScene(sceneId: string, langs: string[]) {
+    // Eigener Flag statt dem globalen enriching → laeuft immer, auch wenn allgemeiner Enrich aktiv ist
+    setEnrichingAfterRewrite(true);
+    api.enrichStoryboard(videoId, langs, [sceneId], provider, selectedModel || undefined)
+      .then(({ job_id }) => {
+        subscribeToJob(job_id, (ev: JobEvent) => {
+          if (ev.type === "completed") {
+            setEnrichingAfterRewrite(false);
+            const enrichedSb = ev.data?.storyboard as StoryboardJson | undefined;
+            if (enrichedSb) {
+              setStoryboard((prev) => {
+                if (!prev) return enrichedSb;
+                const mergedScenes = prev.scenes.map((prevScene) => {
+                  const enrichedScene = enrichedSb.scenes.find((s) => s.scene_id === prevScene.scene_id);
+                  if (!enrichedScene) return prevScene;
+                  return { ...prevScene, slide_panels: enrichedScene.slide_panels, render_hints: enrichedScene.render_hints };
+                });
+                return { ...prev, scenes: mergedScenes };
+              });
+            }
+          } else if (ev.type === "error" || ev.type === "throttled") {
+            setEnrichingAfterRewrite(false);
+          }
+        });
+      })
+      .catch(() => { setEnrichingAfterRewrite(false); });
   }
 
   function triggerEnrich(langs: string[], sceneIds?: string[]) {
@@ -404,11 +524,40 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
           if (ev.type === "completed") {
             setEnriching(false);
             setEnrichMsg("");
-            // Aktualisiertes Storyboard laden damit slide_panels im State sind
-            if (ev.data?.storyboard) {
-              setStoryboard(ev.data.storyboard as StoryboardJson);
+            // Nur slide_panels und render_hints aus dem Enrich-Ergebnis in den aktuellen State mergen
+            // NICHT das gesamte Storyboard ersetzen – das würde laufende/abgeschlossene Rewrites überschreiben
+            const enrichedSb = ev.data?.storyboard as StoryboardJson | undefined;
+            if (enrichedSb) {
+              setStoryboard((prev) => {
+                if (!prev) return enrichedSb;
+                const mergedScenes = prev.scenes.map((prevScene) => {
+                  const enrichedScene = enrichedSb.scenes.find((s) => s.scene_id === prevScene.scene_id);
+                  if (!enrichedScene) return prevScene;
+                  return {
+                    ...prevScene,
+                    slide_panels: enrichedScene.slide_panels,
+                    render_hints: enrichedScene.render_hints,
+                  };
+                });
+                return { ...prev, scenes: mergedScenes };
+              });
             } else {
-              api.getStoryboard(videoId).then(setStoryboard).catch(console.error);
+              // Fallback: Storyboard vom Server laden und slide_panels/render_hints mergen
+              api.getStoryboard(videoId).then((serverSb) => {
+                setStoryboard((prev) => {
+                  if (!prev) return serverSb;
+                  const mergedScenes = prev.scenes.map((prevScene) => {
+                    const serverScene = serverSb.scenes.find((s) => s.scene_id === prevScene.scene_id);
+                    if (!serverScene) return prevScene;
+                    return {
+                      ...prevScene,
+                      slide_panels: serverScene.slide_panels,
+                      render_hints: serverScene.render_hints,
+                    };
+                  });
+                  return { ...prev, scenes: mergedScenes };
+                });
+              }).catch(console.error);
             }
           } else if (ev.type === "error" || ev.type === "throttled") {
             setEnriching(false);
@@ -439,6 +588,15 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
         <div style={{ display: "flex", alignItems: "center", marginBottom: 16, gap: 12 }}>
           <h2 style={{ margin: 0, color: "#4fc3f7" }}>Storyboard-Editor</h2>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <button
+              className={`btn ${showDebug ? "btn-primary" : "btn-ghost"}`}
+              style={{ fontSize: 12 }}
+              onClick={() => setShowDebug((v) => !v)}
+              title="KI-Prompt-Debug anzeigen"
+            >
+              {showDebug ? "🔍 Debug aktiv" : "🔍 Debug"}
+              {debugLogs.length > 0 && <span style={{ marginLeft: 4, fontSize: 10, background: "#1565c0", borderRadius: 8, padding: "0 5px" }}>{debugLogs.length}</span>}
+            </button>
             <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => setShowJson(!showJson)}>
               {showJson ? "Editor" : "JSON"}
             </button>
@@ -898,6 +1056,46 @@ export default function SceneEditor({ videoId, selectedFrames, onDone }: Props):
 
       {storyboard && showJson && (
         <JsonPreview storyboard={storyboard} onChange={setStoryboard} />
+      )}
+
+      {/* Debug-Panel: KI-Prompts */}
+      {showDebug && (
+        <div className="card" style={{ marginTop: 12, background: "#080d14", border: "1px solid #1565c0" }}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 12 }}>
+            <span style={{ color: "#4fc3f7", fontWeight: 700, fontSize: 13 }}>
+              \ud83d\udd0d KI-Debug-Protokoll ({debugLogs.length} Eintr\u00e4ge)
+            </span>
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 11, padding: "2px 8px", marginLeft: "auto" }}
+              onClick={() => setDebugLogs([])}
+            >
+              Leeren
+            </button>
+          </div>
+          {debugLogs.length === 0 && (
+            <p style={{ color: "#556", fontSize: 12, margin: 0 }}>
+              Noch keine KI-Anfragen aufgezeichnet. Starte eine Analyse oder einen Rewrite.
+            </p>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 480, overflowY: "auto" }}>
+            {[...debugLogs].reverse().map((log, i) => (
+              <div key={i} style={{ background: "#0d1520", borderRadius: 6, padding: "8px 12px", border: "1px solid #1a3050" }}>
+                <div style={{ display: "flex", gap: 10, marginBottom: 4, alignItems: "baseline" }}>
+                  <span style={{ fontSize: 10, color: "#556", fontFamily: "monospace", flexShrink: 0 }}>{log.ts}</span>
+                  <span style={{ fontSize: 11, background: "#0d2a4a", color: "#4fc3f7", borderRadius: 3, padding: "0 6px", flexShrink: 0 }}>{log.step}</span>
+                </div>
+                <pre style={{
+                  margin: 0, fontSize: 11, color: "#90b4c8",
+                  fontFamily: "'Consolas', 'Courier New', monospace",
+                  whiteSpace: "pre-wrap", wordBreak: "break-word",
+                  maxHeight: 260, overflowY: "auto",
+                  background: "#050a10", borderRadius: 4, padding: "6px 8px",
+                }}>{log.content}</pre>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Übergebene Frames – Referenzstreifen */}

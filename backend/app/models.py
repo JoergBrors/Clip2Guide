@@ -118,6 +118,11 @@ class AnalyzeRequest(BaseModel):
         default_factory=list,
         description="Dateinamen der ausgewaehlten Frames. Leer = alle Frames verwenden."
     )
+    scene_groups: Optional[List[List[str]]] = Field(
+        None,
+        description="Vom Nutzer vordefinierte Szenen-Gruppen (Liste von Frame-Dateinamen pro Szene). "
+                    "Wenn gesetzt, wird die KI je Gruppe separat aufgerufen und die Szenen-Erkennung uebersprungen."
+    )
 
 
 class RenderRequest(BaseModel):
@@ -145,6 +150,10 @@ class RewriteSceneRequest(BaseModel):
     image_prompts: Optional[Dict[str, str]] = Field(
         None,
         description="Dateiname -> optionale KI-Anweisung pro Bild."
+    )
+    duration_seconds: Optional[float] = Field(
+        None,
+        description="Gewuenschte Szenenlaenge in Sekunden – bestimmt die angestrebte Laenge der speaker_notes."
     )
 
 

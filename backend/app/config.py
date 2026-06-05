@@ -14,9 +14,9 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict
 
 # Projektverzeichnis:
-# Im paketierten Betrieb setzt Electron PROJECT_ROOT auf process.resourcesPath
-# (z.B. %LOCALAPPDATA%\Programs\Clip2Guide\resources), damit Werkzeuge und
-# Workspace relativ zum resources/-Ordner aufgelöst werden.
+# Im paketierten Betrieb setzt Electron PROJECT_ROOT auf USER_LOCAL_DIR
+# (Windows: %LOCALAPPDATA%\Clip2Guide), damit Workspace und Tools relativ
+# zum beschreibbaren Benutzerverzeichnis aufgeloest werden.
 # Im Dev-Modus fehlt PROJECT_ROOT → Fallback: 3 Ebenen über backend/app/config.py.
 _env_project_root = os.environ.get("PROJECT_ROOT", "")
 _PROJECT_ROOT: Path = (
@@ -135,6 +135,16 @@ class Settings(BaseModel):
     # Parallelism
     max_parallel_languages: int = int(os.getenv("MAX_PARALLEL_LANGUAGES", "4"))
     ffmpeg_threads_per_job: int = int(os.getenv("FFMPEG_THREADS_PER_JOB", "2"))
+
+    # KI-Retry bei Throttling (503/429)
+    # Maximale Anzahl an Wiederholungsversuchen pro KI-Aufruf (0 = kein Retry)
+    ai_retry_max_attempts: int = int(os.getenv("AI_RETRY_MAX_ATTEMPTS", "3"))
+    # Wartezeit in Sekunden vor dem ersten Retry
+    ai_retry_initial_delay: float = float(os.getenv("AI_RETRY_INITIAL_DELAY", "10"))
+    # Multiplikator fuer Exponential-Backoff (naechster Versuch wartet delay * factor)
+    ai_retry_backoff_factor: float = float(os.getenv("AI_RETRY_BACKOFF_FACTOR", "2.0"))
+    # Maximale Wartezeit zwischen zwei Retries in Sekunden
+    ai_retry_max_delay: float = float(os.getenv("AI_RETRY_MAX_DELAY", "60"))
 
     @property
     def project_root(self) -> Path:

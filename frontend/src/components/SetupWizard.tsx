@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 
-type Provider = "gemini" | "openai" | "azure_openai";
+type Provider = "gemini" | "openai" | "azure_openai" | "azure_cognitive";
 
 interface ProviderConfig {
   label: string;
@@ -25,7 +25,15 @@ const PROVIDERS: Record<Provider, ProviderConfig> = {
     fields: [
       { key: "AZURE_OPENAI_API_KEY", label: "API Key", placeholder: "" },
       { key: "AZURE_OPENAI_ENDPOINT", label: "Endpoint", placeholder: "https://<resource>.openai.azure.com/" },
-      { key: "AZURE_OPENAI_DEPLOYMENT", label: "Deployment Name", placeholder: "" },
+      { key: "AZURE_OPENAI_DEPLOYMENT", label: "Deployment Name", placeholder: "gpt-4.1-mini" },
+    ],
+  },
+  azure_cognitive: {
+    label: "Azure Cognitive Services",
+    fields: [
+      { key: "AZURE_COGNITIVE_API_KEY", label: "API Key", placeholder: "" },
+      { key: "AZURE_COGNITIVE_ENDPOINT", label: "Endpoint", placeholder: "https://<resource>.cognitiveservices.azure.com/" },
+      { key: "AZURE_COGNITIVE_DEPLOYMENT", label: "Deployment Name", placeholder: "gpt-5-mini" },
     ],
   },
 };
@@ -34,10 +42,18 @@ const DEFAULT_ENV_KEYS: Record<string, string> = {
   AI_PROVIDER: "gemini",
   GEMINI_MODEL: "gemini-2.5-flash",
   OPENAI_MODEL: "gpt-4.1",
-  FFMPEG_PATH: "./tools/ffmpeg/bin/ffmpeg",
-  FFPROBE_PATH: "./tools/ffmpeg/bin/ffprobe",
+  AZURE_OPENAI_DEPLOYMENT: "gpt-4.1-mini",
+  AZURE_OPENAI_API_VERSION: "2025-01-01-preview",
+  AZURE_COGNITIVE_DEPLOYMENT: "gpt-5-mini",
+  AZURE_COGNITIVE_API_VERSION: "2025-04-01-preview",
+  FFMPEG_PATH: "./tools/ffmpeg/bin/ffmpeg.exe",
+  FFPROBE_PATH: "./tools/ffmpeg/bin/ffprobe.exe",
   AUTO_EDITOR_PATH: "./tools/auto-editor/auto-editor-windows-x86_64.exe",
-  WORKSPACE_DIR: "./workspace",
+  WORKSPACE_ROOT: "./workspace",
+  AI_RETRY_MAX_ATTEMPTS: "3",
+  AI_RETRY_INITIAL_DELAY: "10",
+  AI_RETRY_BACKOFF_FACTOR: "2.0",
+  AI_RETRY_MAX_DELAY: "60",
 };
 
 type Step = "welcome" | "provider" | "done";

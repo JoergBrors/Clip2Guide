@@ -77,7 +77,7 @@ export interface ThrottleAlternative {
 }
 
 export interface JobEvent {
-  type: "progress" | "completed" | "error" | "log" | "throttled";
+  type: "progress" | "completed" | "error" | "log" | "throttled" | "debug";
   step: string;
   message: string;
   percent: number;
@@ -205,7 +205,14 @@ export const api = {
     return request(`/api/ai/models?provider=${encodeURIComponent(provider)}`);
   },
 
-  analyzeVideo(videoId: string, languages: string[], provider?: string, model?: string, selectedFrames?: string[]): Promise<JobStartResponse> {
+  analyzeVideo(
+    videoId: string,
+    languages: string[],
+    provider?: string,
+    model?: string,
+    selectedFrames?: string[],
+    sceneGroups?: string[][],
+  ): Promise<JobStartResponse> {
     return request<JobStartResponse>(`/api/videos/${videoId}/analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -215,6 +222,7 @@ export const api = {
         ai_provider: provider,
         ai_model: model,
         selected_frames: selectedFrames ?? [],
+        scene_groups: sceneGroups ?? null,
       }),
     });
   },
@@ -240,6 +248,7 @@ export const api = {
     imagePrompts?: Record<string, string>,
     provider?: string,
     model?: string,
+    durationSeconds?: number,
   ): Promise<JobStartResponse> {
     return request<JobStartResponse>(`/api/videos/${videoId}/rewrite-scene`, {
       method: "POST",
@@ -252,6 +261,7 @@ export const api = {
         image_prompts: imagePrompts,
         ai_provider: provider,
         ai_model: model,
+        duration_seconds: durationSeconds,
       }),
     });
   },
