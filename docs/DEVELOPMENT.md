@@ -162,11 +162,12 @@ Das Projekt verwendet **zwei separate** `tsconfig.json`-Dateien.
 ### Neuen KI-Provider hinzufügen
 
 1. Neue Datei `backend/app/services/{name}_provider.py` anlegen
-2. Von `AiProviderBase` erben, `analyze_frames()` implementieren
-3. In `backend/app/routers/ai.py` im Provider-Factory-Block registrieren
-4. Neue `AiProvider`-Enum-Konstante in `backend/app/models.py` hinzufügen
-5. Neue Umgebungsvariablen in `backend/app/config.py` (Settings) ergänzen
-6. `localstuff/env.example` aktualisieren
+2. Von `AiProviderBase` erben, `analyze_frames()` **und** `complete_text()` implementieren
+3. In `backend/app/routers/ai.py` in `_get_provider()` registrieren
+4. In `OPENAI_VISION_MODELS` / `AZURE_OPENAI_VISION_MODELS` o.ä. eine neue Konstante anlegen oder das Modell-Listing erweitern
+5. Neue `AiProvider`-Enum-Konstante in `backend/app/models.py` hinzufügen
+6. Neue Umgebungsvariablen in `backend/app/config.py` (Settings) ergänzen
+7. `localstuff/env.example` und `docs/CONFIGURATION.md` aktualisieren
 
 ### Neuen Backend-Endpunkt hinzufügen
 

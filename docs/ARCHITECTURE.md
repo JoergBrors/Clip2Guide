@@ -279,6 +279,7 @@ Event-Typen: `progress` | `completed` | `error` | `log` | `throttled`
 ```
 AiProviderBase (ABC)          ← app/services/ai_provider_base.py
 │   analyze_frames(frame_paths, languages, video_id, prompt_extra) → StoryboardJson
+│   complete_text(prompt) → str   ← Text-only Aufruf, für Enrich-Aufgaben
 │
 ├── GeminiProvider            ← gemini_provider.py
 │     google-genai SDK
@@ -290,9 +291,15 @@ AiProviderBase (ABC)          ← app/services/ai_provider_base.py
 │     Bilder als base64 data URL (data:image/jpeg;base64,...)
 │     Modelle: gpt-4.1, gpt-4.1-mini, gpt-4o, gpt-4o-mini, o4-mini, o3
 │
-└── AzureOpenAiProvider       ← azure_openai_provider.py
-      openai SDK mit azure_endpoint + api_version
-      Modelle: gpt-4.1-mini, gpt-4.1, gpt-4o, gpt-4o-mini
+├── AzureOpenAiProvider       ← azure_openai_provider.py
+│     openai SDK mit azure_endpoint + api_version
+│     Endpunkt: openai.azure.com (AZURE_OPENAI_ENDPOINT)
+│     Modelle: gpt-4.1-mini, gpt-4.1, gpt-4o, gpt-4o-mini
+│
+└── AzureCognitiveProvider    ← azure_cognitive_provider.py
+      openai SDK mit cognitiveservices.azure.com-Endpunkt
+      Eigene Konfigurationsvariablen: AZURE_COGNITIVE_*
+      Modelle: gpt-5-mini, gpt-4.1-mini, gpt-4.1, gpt-4o
 ```
 
 Der aktive Provider wird aus `settings.ai_providers` bestimmt
@@ -366,6 +373,12 @@ Definiert in `preload.ts`, implementiert in `main.ts`:
 | `setup:write-env` | invoke | Schreibt Key-Value-Paare in die `.env` |
 | `setup:read-env` | invoke | Liest aktuelle `.env`-Werte |
 | `setup:completed` | send | Signalisiert dem Main-Prozess: Setup fertig |
+| `app:uninstall` | invoke | Deinstallations-Dialog; `deleteUserData: boolean` |
+
+**contextBridge-Objekte:**
+- `window.clip2guide` – `backendUrl`, `openPath`, `openFileDialog`, `saveFileDialog`, `getVersion`
+- `window.setupAPI` – `isComplete`, `runInitial`, `onLog`, `writeEnv`, `readEnv`, `complete`
+- `window.appAPI` – `uninstall(deleteUserData)`
 
 ---
 
@@ -377,19 +390,22 @@ StoryboardJson
 ├── source_video: str
 ├── cut_video: str | None
 ├── languages: List[str]
+├── metadata: Dict[str, Any]
 └── scenes: List[Scene]
     └── Scene
-        ├── scene_id: str          (z.B. "scene_001")
-        ├── start_frame: str       (Dateiname)
-        ├── end_frame: str | None
-        ├── image_group: List[str] (alle Frames dieser Szene)
-        ├── image_prompts: Dict[str, str]  (Dateiname → KI-Anweisung)
-        ├── texts: Dict[str, TextPanel]    (Sprachcode → Text)
+        ├── scene_id: str              (z.B. "scene_001")
+        ├── start_frame: str           (Dateiname des ersten Frames)
+        ├── end_frame: str | None      (Dateiname des letzten Frames)
+        ├── image_group: List[str]     (alle Frames dieser Szene)
+        ├── image_prompts: Dict[str, str]   (Dateiname → KI-Anweisung pro Bild)
+        ├── texts: Dict[str, TextPanel]     (Sprachcode → Text)
         │   └── TextPanel
         │       ├── heading: str
         │       ├── body: str
-        │       └── speaker_notes: str    (TTS-Vorlese-Text)
-        └── duration_seconds: float (≥ 0.5)
+        │       └── speaker_notes: str     (TTS-Vorlese-Text)
+        ├── slide_panels: Dict[str, List[TextPanel]]  (Sprachcode → TextPanel je Bild)
+        ├── render_hints: Dict[str, Any]   (transition, image_durations, text_scroll_speed)
+        └── duration_seconds: float   (≥ 0.5)
 
 FrameStack
 ├── video_id: str
@@ -401,9 +417,21 @@ FrameStack
         └── scene_index: int | None
 
 JobEvent
-├── type: "progress" | "completed" | "error" | "log" | "throttled"
+├── type: "progress" | "completed" | "error" | "log" | "throttled" | "debug"
 ├── step: str
 ├── message: str
 ├── percent: int (0–100)
 └── data: Dict | None
+
+# Request-Modelle
+ProcessingRequest      (video_id, edit_mode, margin, has_audio, audio_threshold, motion_threshold)
+AnalyzeRequest         (video_id, languages, ai_provider, ai_model, selected_frames, scene_groups)
+RewriteSceneRequest    (scene_id, image_group, languages, ai_provider, ai_model, current_texts, image_prompts, duration_seconds)
+EnrichRequest          (languages, scene_ids, ai_provider, ai_model)
+RenderRequest          (video_id, languages, fps, quality, tts_slow)
+
+# Response-Modelle
+UploadResponse         (video_id, filename, path, has_audio, metadata)
+JobStartResponse       (job_id, video_id, message)
+HealthResponse         (status, version)
 ```

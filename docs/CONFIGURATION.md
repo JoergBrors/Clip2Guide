@@ -21,11 +21,11 @@ Vorlage: `localstuff/env.example`
 
 | Variable | Standard | Beschreibung |
 |---|---|---|
-| `HOST` | `127.0.0.1` | Bind-Adresse für den FastAPI-Server |
-| `PORT` | `8787` | Port für den FastAPI-Server |
+| `APP_HOST` | `127.0.0.1` | Bind-Adresse für den FastAPI-Server |
+| `APP_PORT` | `8787` | Port für den FastAPI-Server |
 
-> Hinweis: Werte hier ändern erfordert auch Anpassung in `frontend/electron/main.ts`,
-> da der Port dort als Standard-Fallback fest eingetragen ist.
+> Hinweis: Port-Änderung erfordert auch Anpassung in `frontend/electron/main.ts`
+> (Konstante `BACKEND_PORT`).
 
 ---
 
@@ -35,11 +35,11 @@ Vorlage: `localstuff/env.example`
 
 | Variable | Beispiel | Beschreibung |
 |---|---|---|
-| `AI_PROVIDER` | `gemini` | Kommagetrennte Liste aktiver Provider. Mögliche Werte: `gemini`, `openai`, `azure_openai`. Der erste Eintrag ist der Vorausgewählte im UI. |
+| `AI_PROVIDER` | `gemini` | Kommagetrennte Liste aktiver Provider. Mögliche Werte: `gemini`, `openai`, `azure_openai`, `azure_cognitive`. Der erste Eintrag ist der Vorausgewählte im UI. |
 
 Beispiel mit mehreren Providern:
 ```
-AI_PROVIDER=gemini,openai
+AI_PROVIDER=gemini,azure_openai
 ```
 
 ### Google Gemini
@@ -47,6 +47,7 @@ AI_PROVIDER=gemini,openai
 | Variable | Standard | Beschreibung |
 |---|---|---|
 | `GEMINI_API_KEY` | *(leer)* | API-Key aus [Google AI Studio](https://aistudio.google.com/) |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Standard-Modell (wird von der UI überschrieben) |
 
 Verfügbare Modelle werden **dynamisch** per `client.models.list()` abgerufen —
 keine Konfiguration nötig, hängt allein vom API-Key ab.
@@ -56,6 +57,7 @@ keine Konfiguration nötig, hängt allein vom API-Key ab.
 | Variable | Standard | Beschreibung |
 |---|---|---|
 | `OPENAI_API_KEY` | *(leer)* | API-Key von [platform.openai.com](https://platform.openai.com/) |
+| `OPENAI_MODEL` | `gpt-4.1` | Standard-Modell |
 
 Verfügbare Modelle (fest im Code):
 `gpt-4.1`, `gpt-4.1-mini`, `gpt-4o`, `gpt-4o-mini`, `o4-mini`, `o3`
@@ -66,19 +68,32 @@ Verfügbare Modelle (fest im Code):
 |---|---|---|
 | `AZURE_OPENAI_API_KEY` | *(leer)* | API-Key des Azure OpenAI Service |
 | `AZURE_OPENAI_ENDPOINT` | *(leer)* | Endpunkt-URL, z.B. `https://my-resource.openai.azure.com/` |
-| `AZURE_OPENAI_API_VERSION` | `2024-12-01-preview` | API-Version |
+| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1-mini` | Deployment-Name (= Modell-Name) |
+| `AZURE_OPENAI_API_VERSION` | `2025-01-01-preview` | API-Version |
 
 Verfügbare Modelle (fest im Code):
 `gpt-4.1-mini`, `gpt-4.1`, `gpt-4o`, `gpt-4o-mini`
+
+### Azure Cognitive Services
+
+| Variable | Standard | Beschreibung |
+|---|---|---|
+| `AZURE_COGNITIVE_API_KEY` | *(leer)* | API-Key des Azure Cognitive Services |
+| `AZURE_COGNITIVE_ENDPOINT` | *(leer)* | Endpunkt-URL, z.B. `https://my-resource.cognitiveservices.azure.com/` |
+| `AZURE_COGNITIVE_DEPLOYMENT` | `gpt-5-mini` | Deployment-Name |
+| `AZURE_COGNITIVE_API_VERSION` | `2025-04-01-preview` | API-Version |
+
+Verfügbare Modelle (fest im Code):
+`gpt-5-mini`, `gpt-4.1-mini`, `gpt-4.1`, `gpt-4o`
 
 ---
 
 ## Tool-Pfade
 
-Alle Pfade sind relativ zum **Projekt-Root** anzugeben.
-In gepackten Apps werden sie relativ zu `process.resourcesPath` aufgelöst.
+Alle Pfade sind relativ zum **Projekt-Root** anzugeben (= `PROJECT_ROOT`-Umgebungsvariable).
+In gepackten Apps werden sie relativ zu `USER_LOCAL_DIR` aufgelöst.
 
-| Variable | Standard | Beschreibung |
+| Variable | Standard (Windows) | Beschreibung |
 |---|---|---|
 | `FFMPEG_PATH` | `tools/ffmpeg/bin/ffmpeg.exe` | Pfad zur FFmpeg-Binary |
 | `FFPROBE_PATH` | `tools/ffmpeg/bin/ffprobe.exe` | Pfad zur FFprobe-Binary |
@@ -96,53 +111,43 @@ In gepackten Apps werden sie relativ zu `process.resourcesPath` aufgelöst.
 ## Workspace-Verzeichnisse
 
 Alle Verzeichnisse werden automatisch angelegt, wenn sie fehlen.
-Auf dem Produktions-System liegen diese unter `userData/workspace/`.
+Im Produktionsbetrieb liegen sie unter `USER_LOCAL_DIR/workspace/` (Windows: `%LOCALAPPDATA%\Clip2Guide\workspace\`).
 
 | Variable | Standard | Beschreibung |
 |---|---|---|
-| `UPLOAD_DIR` | `workspace/uploads` | Originalaufnahmen nach dem Upload |
-| `NORMALIZED_DIR` | `workspace/normalized` | FFmpeg-normalisierte Videos |
-| `CUT_DIR` | `workspace/cut` | Auto-Editor-Ausgabe |
-| `FRAMES_DIR` | `workspace/frames` | Extrahierte JPG-Frames |
-| `AI_OUTPUT_DIR` | `workspace/ai-output` | storyboard.json + frame_stack.json |
-| `OUTPUT_DIR` | `workspace/output` | Fertige Tutorial-Videos |
-| `LOG_DIR` | `workspace/logs` | Backend-Logs |
+| `WORKSPACE_ROOT` | `./workspace` | Basis-Verzeichnis für alle Laufzeit-Daten |
+| `UPLOAD_DIR` | `./workspace/uploads` | Originalaufnahmen nach dem Upload |
+| `NORMALIZED_DIR` | `./workspace/normalized` | FFmpeg-normalisierte Videos |
+| `CUT_DIR` | `./workspace/cut` | Auto-Editor-Ausgabe |
+| `FRAMES_DIR` | `./workspace/frames` | Extrahierte JPG-Frames |
+| `AI_OUTPUT_DIR` | `./workspace/ai-output` | storyboard.json + frame_stack.json |
+| `RENDER_OUTPUT_DIR` | `./workspace/output` | Fertige Tutorial-Videos |
 
 ---
 
-## Video-Einstellungen
+## Video- und Frame-Einstellungen
 
 | Variable | Standard | Beschreibung |
 |---|---|---|
-| `TARGET_WIDTH` | `1920` | Zielbreite bei FFmpeg-Normalisierung (Pixel) |
-| `TARGET_HEIGHT` | `1080` | Zielhöhe bei FFmpeg-Normalisierung (Pixel) |
-| `TARGET_FPS` | `30` | Ziel-Framerate bei Normalisierung |
-| `FRAME_RATE` | `0.333` | Frames pro Sekunde bei der Frame-Extraktion (Standard: 1 Frame alle ~3 s) |
+| `OUTPUT_VIDEO_WIDTH` | `1920` | Ausgabebreite (Pixel) |
+| `OUTPUT_VIDEO_HEIGHT` | `1080` | Ausgabehöhe (Pixel) |
+| `FRAME_EXTRACTION_FPS` | `0.333` | Frames/Sekunde bei der Extraktion (0.333 = 1 Frame alle ~3 s) |
+| `SCENE_DIFF_THRESHOLD` | `0.08` | Threshold für Szenen-Erkennung per OpenCV |
+| `MIN_SCENE_SECONDS` | `1.0` | Mindestlänge einer Szene (Sekunden) |
+| `DEFAULT_LANGUAGE` | `de` | Standard-Sprache für neue Storyboards |
 
 ---
 
-## Rendering
+## Auto-Editor-Defaults
+
+Diese Werte werden als Standard verwendet, wenn die App kein explizites Body-Feld erhält.
 
 | Variable | Standard | Beschreibung |
 |---|---|---|
-| `RENDER_QUALITY` | `ausgewogen` | Qualitätsstufe: `schnell` / `ausgewogen` / `beste` |
-
-| Stufe | CRF | FFmpeg-Preset | Dateigröße |
-|---|---|---|---|
-| `schnell` | 28 | veryfast | klein |
-| `ausgewogen` | 23 | faster | mittel |
-| `beste` | 18 | medium | groß |
-
----
-
-## Auto-Editor-Parameter
-
-| Variable | Standard | Beschreibung |
-|---|---|---|
-| `AUTO_EDITOR_EDIT_MODE` | `audio` | Erkennungsmodus: `audio` / `motion` / `combined` |
-| `AUTO_EDITOR_MARGIN` | `0.3sec` | Puffer vor/nach erkannten aktiven Abschnitten |
-| `AUTO_EDITOR_SILENT_THRESHOLD` | `0.04` | Lautstärke-Schwellwert für Stille-Erkennung (0.0–1.0) |
-| `AUTO_EDITOR_MOTION_THRESHOLD` | `0.02` | Bewegungs-Schwellwert (0.0–1.0) |
+| `AUTO_EDITOR_AUDIO_EDIT` | `audio:threshold=0.03` | Audio-Erkennungs-Argument |
+| `AUTO_EDITOR_MOTION_EDIT` | `motion:threshold=0.08` | Bewegungs-Erkennungs-Argument |
+| `AUTO_EDITOR_COMBINED_EDIT` | `(or audio:0.03 motion:0.08)` | Kombinierter Modus |
+| `AUTO_EDITOR_MARGIN` | `0.5s` | Puffer vor/nach erkannten aktiven Abschnitten |
 
 ---
 
@@ -150,7 +155,21 @@ Auf dem Produktions-System liegen diese unter `userData/workspace/`.
 
 | Variable | Standard | Beschreibung |
 |---|---|---|
-| `MAX_CONCURRENT_JOBS` | `2` | Maximale Anzahl gleichzeitiger Hintergrund-Jobs |
+| `MAX_PARALLEL_LANGUAGES` | `4` | Maximale Anzahl parallel gerenderter Sprachen |
+| `FFMPEG_THREADS_PER_JOB` | `2` | FFmpeg-Threads pro Normalisierungs-Job |
+
+---
+
+## KI-Retry-Konfiguration
+
+Bei Throttling (HTTP 429 / 503) werden KI-Aufrufe automatisch wiederholt.
+
+| Variable | Standard | Beschreibung |
+|---|---|---|
+| `AI_RETRY_MAX_ATTEMPTS` | `3` | Maximale Wiederholungsversuche (0 = kein Retry) |
+| `AI_RETRY_INITIAL_DELAY` | `10` | Wartezeit in Sekunden vor dem ersten Retry |
+| `AI_RETRY_BACKOFF_FACTOR` | `2.0` | Exponential-Backoff-Multiplikator |
+| `AI_RETRY_MAX_DELAY` | `60` | Maximale Wartezeit zwischen zwei Retries (Sekunden) |
 
 ---
 
@@ -158,22 +177,31 @@ Auf dem Produktions-System liegen diese unter `userData/workspace/`.
 
 ```ini
 # ── Server ──────────────────────────────────────────────────────────
-HOST=127.0.0.1
-PORT=8787
+APP_HOST=127.0.0.1
+APP_PORT=8787
 
 # ── KI-Provider ─────────────────────────────────────────────────────
 AI_PROVIDER=gemini
 
 # Gemini
 GEMINI_API_KEY=AIzaSy...
+GEMINI_MODEL=gemini-2.5-flash
 
 # OpenAI (optional)
 # OPENAI_API_KEY=sk-...
+# OPENAI_MODEL=gpt-4.1
 
 # Azure OpenAI (optional)
 # AZURE_OPENAI_API_KEY=...
 # AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com/
-# AZURE_OPENAI_API_VERSION=2024-12-01-preview
+# AZURE_OPENAI_DEPLOYMENT=gpt-4.1-mini
+# AZURE_OPENAI_API_VERSION=2025-01-01-preview
+
+# Azure Cognitive Services (optional)
+# AZURE_COGNITIVE_API_KEY=...
+# AZURE_COGNITIVE_ENDPOINT=https://my-resource.cognitiveservices.azure.com/
+# AZURE_COGNITIVE_DEPLOYMENT=gpt-5-mini
+# AZURE_COGNITIVE_API_VERSION=2025-04-01-preview
 
 # ── Tool-Pfade ───────────────────────────────────────────────────────
 FFMPEG_PATH=tools/ffmpeg/bin/ffmpeg.exe
@@ -181,29 +209,32 @@ FFPROBE_PATH=tools/ffmpeg/bin/ffprobe.exe
 AUTO_EDITOR_PATH=tools/auto-editor/auto-editor-windows-x86_64.exe
 
 # ── Workspace ────────────────────────────────────────────────────────
-UPLOAD_DIR=workspace/uploads
-NORMALIZED_DIR=workspace/normalized
-CUT_DIR=workspace/cut
-FRAMES_DIR=workspace/frames
-AI_OUTPUT_DIR=workspace/ai-output
-OUTPUT_DIR=workspace/output
-LOG_DIR=workspace/logs
+WORKSPACE_ROOT=./workspace
+UPLOAD_DIR=./workspace/uploads
+NORMALIZED_DIR=./workspace/normalized
+CUT_DIR=./workspace/cut
+FRAMES_DIR=./workspace/frames
+AI_OUTPUT_DIR=./workspace/ai-output
+RENDER_OUTPUT_DIR=./workspace/output
 
-# ── Video ────────────────────────────────────────────────────────────
-TARGET_WIDTH=1920
-TARGET_HEIGHT=1080
-TARGET_FPS=30
-FRAME_RATE=0.333
-
-# ── Rendering ────────────────────────────────────────────────────────
-RENDER_QUALITY=ausgewogen
+# ── Video / Frames ────────────────────────────────────────────────────
+OUTPUT_VIDEO_WIDTH=1920
+OUTPUT_VIDEO_HEIGHT=1080
+FRAME_EXTRACTION_FPS=0.333
+DEFAULT_LANGUAGE=de
 
 # ── Auto-Editor ──────────────────────────────────────────────────────
-AUTO_EDITOR_EDIT_MODE=audio
-AUTO_EDITOR_MARGIN=0.3sec
-AUTO_EDITOR_SILENT_THRESHOLD=0.04
-AUTO_EDITOR_MOTION_THRESHOLD=0.02
+AUTO_EDITOR_AUDIO_EDIT=audio:threshold=0.03
+AUTO_EDITOR_MOTION_EDIT=motion:threshold=0.08
+AUTO_EDITOR_MARGIN=0.5s
 
 # ── Parallelisierung ──────────────────────────────────────────────────
-MAX_CONCURRENT_JOBS=2
+MAX_PARALLEL_LANGUAGES=4
+FFMPEG_THREADS_PER_JOB=2
+
+# ── KI-Retry ─────────────────────────────────────────────────────────
+AI_RETRY_MAX_ATTEMPTS=3
+AI_RETRY_INITIAL_DELAY=10
+AI_RETRY_BACKOFF_FACTOR=2.0
+AI_RETRY_MAX_DELAY=60
 ```
