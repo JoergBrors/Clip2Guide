@@ -718,6 +718,14 @@ USER_LOCAL_DIR: string
 - `backend/app/main.py` nutzt einen FastAPI-`lifespan`-Handler und bereinigt beim Backend-Start `workspace/tmp/`. Dadurch werden alte temporaere ZIP-Exportfragmente und sonstige Laufzeitreste entfernt, ohne persistente Uploads, Frames, Storyboards oder Outputs anzutasten.
 - `frontend/electron/main.ts` leert nach `app.whenReady()` den Electron-Session-Cache, bevor Backend/Fenster gestartet werden. Dadurch werden alte Renderer-/HTTP-Cachefragmente beim App-Start entfernt.
 
+### Requirements-Auto-Install beim App-Start
+
+- `ensureRequirements()` in `frontend/electron/main.ts` läuft **synchron vor `startBackend()`** (und nach dem Setup-Wizard).
+- Ablauf: SHA256 von `requirements.txt` berechnen → vergleichen mit `backend/.venv/.requirements_hash` → bei Abweichung oder fehlendem Hash: `pip install --upgrade -r requirements.txt` via `spawnSync` → Hash aktualisieren.
+- `requirements.txt` wird zuerst in `resources/backend/` (paketieter Betrieb) gesucht, dann in `USER_LOCAL_DIR/backend/` (Dev-Modus).
+- Neue Pakete in `requirements.txt` werden damit beim nächsten App-Start automatisch nachinstalliert, ohne manuellen Setup-Lauf.
+- Ein `pip install`-Fehler bricht den Start nicht hart ab — Fehlermeldung erscheint im Electron-Log, Backend-Start wird dennoch versucht.
+
 ### Auto-Editor Decode-Pruefung
 
 - `backend/app/routers/processing.py` prueft vor dem Auto-Editor-Schnitt bei Videos mit Audio per FFmpeg, ob die erste Audiospur kurz decodierbar ist. Bei Decode-Problemen wird unter `workspace/tmp/auto-editor-input/{video_id}_ae_safe.mp4` eine Arbeitsdatei mit kopiertem Video und AAC-Audio erzeugt und fuer Auto-Editor genutzt.
