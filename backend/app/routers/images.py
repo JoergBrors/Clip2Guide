@@ -18,9 +18,17 @@ from app.config import settings
 from app.models import FrameInfo, FrameStack
 from app.services.frame_stack_service import FrameStackService
 
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    _HEIC_SUPPORTED = True
+except ImportError:
+    _HEIC_SUPPORTED = False
+
 router = APIRouter()
 
-_ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+_ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"}
+_HEIC_SUFFIXES = {".heic", ".heif"}
 _MAX_IMAGES = 200
 
 
@@ -86,9 +94,14 @@ async def upload_images(files: List[UploadFile] = File(...)) -> ImageSetResponse
         original_suffix = Path(file.filename or "image.jpg").suffix.lower()
         if original_suffix not in _ALLOWED_SUFFIXES:
             raise HTTPException(415, f"Format nicht unterstützt: {original_suffix}")
+        if original_suffix in _HEIC_SUFFIXES and not _HEIC_SUPPORTED:
+            raise HTTPException(415, "HEIC/HEIF wird nicht unterstützt – pillow-heif fehlt")
 
         image_id = str(uuid.uuid4())
-        dest = img_dir / f"{image_id}{original_suffix}"
+        # HEIC/HEIF direkt zu JPEG konvertieren – Folgestufen erwarten kein HEIC
+        is_heic = original_suffix in _HEIC_SUFFIXES
+        upload_suffix = original_suffix if not is_heic else original_suffix
+        dest = img_dir / f"{image_id}{upload_suffix}"
 
         async with aiofiles.open(dest, "wb") as out:
             while chunk := await file.read(512 * 1024):
@@ -96,6 +109,12 @@ async def upload_images(files: List[UploadFile] = File(...)) -> ImageSetResponse
 
         try:
             with PILImage.open(dest) as img:
+                if is_heic:
+                    # HEIC → JPEG konvertieren; Original löschen
+                    jpg_dest = img_dir / f"{image_id}.jpg"
+                    img.convert("RGB").save(jpg_dest, "JPEG", quality=95, optimize=True)
+                    dest.unlink(missing_ok=True)
+                    dest = jpg_dest
                 w, h = img.size
         except Exception:
             dest.unlink(missing_ok=True)
@@ -178,41 +197,6 @@ async def normalize_images(req: NormalizeRequest) -> NormalizeResponse:
         ))
 
     return NormalizeResponse(session_id=req.session_id, images=result_images)
-
-
-@router.post("/images/{session_id}/to-frames", response_model=FrameStack)
-def images_to_frames(session_id: str) -> FrameStack:
-    """Importiert Bilder einer Session als Frames fuer die Video-Pipeline."""
-    img_dir = _session_dir(session_id)
-    if not img_dir.exists():
-        raise HTTPException(404, "Session nicht gefunden")
-
-    # Normalisierte Bilder bevorzugen
-    norm_dir = img_dir / "normalized"
-    src_dir = norm_dir if norm_dir.exists() and any(
-        f for f in norm_dir.iterdir() if f.is_file() and f.suffix.lower() in _ALLOWED_SUFFIXES
-    ) else img_dir
-
-    src_files = sorted(
-        f for f in src_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in _ALLOWED_SUFFIXES
-    )
-    if not src_files:
-        raise HTTPException(404, "Keine Bilder in dieser Session")
-
-    video_id = str(uuid.uuid4())
-    frames_dir = settings.frames_dir / video_id
-    frames_dir.mkdir(parents=True, exist_ok=True)
-
-    frames: List[FrameInfo] = []
-    for i, src in enumerate(src_files):
-        dest_name = f"frame_{i + 1:03d}{src.suffix.lower()}"
-        shutil.copy2(src, frames_dir / dest_name)
-        frames.append(FrameInfo(filename=dest_name, timestamp_seconds=float(i), scene_index=None))
-
-    stack = FrameStack(video_id=video_id, frames=frames, total_frames=len(frames))
-    FrameStackService().save(stack)
-    return stack
 
 
 @router.post("/images/{session_id}/to-frames", response_model=FrameStack)

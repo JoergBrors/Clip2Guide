@@ -279,14 +279,14 @@ export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImp
                 : "Bilder hier ablegen oder klicken"}
             </div>
             <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>
-              JPEG, PNG, WebP – mehrere gleichzeitig möglich
+              JPEG, PNG, WebP, HEIC – mehrere gleichzeitig möglich
             </div>
           </div>
 
           <input
             ref={imageInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
             multiple
             onChange={onImageInputChange}
             style={{ display: "none" }}

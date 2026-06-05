@@ -104,10 +104,20 @@ class Settings(BaseModel):
     azure_cognitive_deployment: str = os.getenv("AZURE_COGNITIVE_DEPLOYMENT", "gpt-5-mini")
     azure_cognitive_api_version: str = os.getenv("AZURE_COGNITIVE_API_VERSION", "2025-04-01-preview")
 
-    # Tools
-    ffmpeg_path: Path = _resolve("FFMPEG_PATH", "./tools/ffmpeg/bin/ffmpeg.exe")
-    ffprobe_path: Path = _resolve("FFPROBE_PATH", "./tools/ffmpeg/bin/ffprobe.exe")
-    auto_editor_path: Path = _resolve("AUTO_EDITOR_PATH", "./tools/auto-editor/auto-editor-windows-x86_64.exe")
+    # Tools – plattformabhängige Dateiendung (.exe nur auf Windows)
+    ffmpeg_path: Path = _resolve(
+        "FFMPEG_PATH",
+        "./tools/ffmpeg/bin/ffmpeg.exe" if sys.platform == "win32" else "./tools/ffmpeg/bin/ffmpeg",
+    )
+    ffprobe_path: Path = _resolve(
+        "FFPROBE_PATH",
+        "./tools/ffmpeg/bin/ffprobe.exe" if sys.platform == "win32" else "./tools/ffmpeg/bin/ffprobe",
+    )
+    auto_editor_path: Path = _resolve(
+        "AUTO_EDITOR_PATH",
+        "./tools/auto-editor/auto-editor-windows-x86_64.exe" if sys.platform == "win32"
+        else "./tools/auto-editor/auto-editor-macos-arm64",
+    )
 
     # Workspace
     workspace_root: Path = _resolve("WORKSPACE_ROOT", "./workspace")

@@ -197,14 +197,29 @@ if [[ "$SKIP_PYTHON" == "false" ]]; then
     exit 1
   fi
 
-  echo "Installiere Python-Module aus $REQUIREMENTS_PATH..."
-  if ! python -m pip install --upgrade -r "$REQUIREMENTS_PATH"; then
-    fail "pip install -r requirements.txt fehlgeschlagen"
+  # Hash der requirements.txt prüfen – pip install nur wenn sich etwas geändert hat
+  HASH_FILE="$VENV_PATH/.requirements_hash"
+  REQ_HASH=$(shasum -a 256 "$REQUIREMENTS_PATH" | awk '{print $1}')
+  STORED_HASH=""
+  if [[ -f "$HASH_FILE" ]]; then
+    STORED_HASH=$(cat "$HASH_FILE")
+  fi
+
+  if [[ "$REQ_HASH" != "$STORED_HASH" ]]; then
+    echo "Installiere Python-Module aus $REQUIREMENTS_PATH..."
+    echo "  (requirements.txt geändert oder Erstinstallation)"
+    if ! python -m pip install --upgrade -r "$REQUIREMENTS_PATH"; then
+      fail "pip install -r requirements.txt fehlgeschlagen"
+    fi
+    echo "$REQ_HASH" > "$HASH_FILE"
+    ok "Python-Module installiert, Hash gespeichert"
+  else
+    ok "requirements.txt unverändert – pip install übersprungen"
   fi
 
   # Kritische Module explizit prüfen
   MISSING_MODS=()
-  for mod in fastapi uvicorn pydantic cv2 moviepy PIL docx; do
+  for mod in fastapi uvicorn pydantic cv2 moviepy PIL docx pillow_heif; do
     if ! python -c "import $mod" 2>/dev/null; then
       MISSING_MODS+=("$mod")
     fi
@@ -372,7 +387,7 @@ section "Selbsttest"
 if [[ "$SKIP_PYTHON" == "false" ]]; then
   echo "Python-Module..."
   source "$VENV_PATH/bin/activate"
-  if python -c "import fastapi, pydantic, cv2, moviepy, PIL, dotenv, docx; print('[OK] Kernmodule geladen'); print(f'     MoviePy {moviepy.__version__}  |  Pillow {PIL.__version__}')"; then
+  if python -c "import fastapi, pydantic, cv2, moviepy, PIL, dotenv, docx, pillow_heif; print('[OK] Kernmodule geladen'); print(f'     MoviePy {moviepy.__version__}  |  Pillow {PIL.__version__}')"; then
     : # ok printed inline
   else
     fail "Python-Modultest fehlgeschlagen"

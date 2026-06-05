@@ -190,14 +190,29 @@ if (-not $SkipPythonInstall) {
         throw "requirements.txt nicht gefunden (weder in AppSourceDir noch in $BackendDir)"
     }
 
-    Write-Host "Installiere Python-Module aus $RequirementsPath..."
-    python -m pip install --upgrade -r $RequirementsPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "pip install -r requirements.txt fehlgeschlagen (ExitCode=$LASTEXITCODE)"
+    # Hash der requirements.txt prüfen – pip install nur wenn sich etwas geändert hat
+    $HashFile = Join-Path $VenvPath ".requirements_hash"
+    $ReqHash = (Get-FileHash -Algorithm SHA256 $RequirementsPath).Hash
+    $StoredHash = ""
+    if (Test-Path $HashFile) {
+        $StoredHash = (Get-Content $HashFile -Raw).Trim()
+    }
+
+    if ($ReqHash -ne $StoredHash) {
+        Write-Host "Installiere Python-Module aus $RequirementsPath..."
+        Write-Host "  (requirements.txt geaendert oder Erstinstallation)"
+        python -m pip install --upgrade -r $RequirementsPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "pip install -r requirements.txt fehlgeschlagen (ExitCode=$LASTEXITCODE)"
+        }
+        Set-Content -Path $HashFile -Value $ReqHash -NoNewline
+        Write-Host "[OK] Python-Module installiert, Hash gespeichert"
+    } else {
+        Write-Host "[OK] requirements.txt unveraendert - pip install uebersprungen"
     }
 
     # Kritische Module explizit prüfen
-    $CriticalModules = @("fastapi", "uvicorn", "pydantic", "cv2", "moviepy", "PIL", "docx")
+    $CriticalModules = @("fastapi", "uvicorn", "pydantic", "cv2", "moviepy", "PIL", "docx", "pillow_heif")
     $MissingModules = @()
     foreach ($mod in $CriticalModules) {
         & (Join-Path $VenvPath "Scripts\python.exe") -c "import $mod" 2>&1 | Out-Null
@@ -331,7 +346,7 @@ $AnyFailed = $false
 if (-not $SkipPythonInstall) {
     Write-Host "Python-Module..."
     try {
-        $ModuleCheck = "import fastapi, pydantic, cv2, moviepy, PIL, dotenv, docx; print('[OK] Kernmodule geladen'); print(f'     MoviePy {moviepy.__version__}  |  Pillow {PIL.__version__}')"
+        $ModuleCheck = "import fastapi, pydantic, cv2, moviepy, PIL, dotenv, docx, pillow_heif; print('[OK] Kernmodule geladen'); print(f'     MoviePy {moviepy.__version__}  |  Pillow {PIL.__version__}')"
         & (Join-Path $VenvPath "Scripts\python.exe") -c $ModuleCheck
     } catch {
         Write-Warning "[FAIL] Python-Modultest fehlgeschlagen: $_"
