@@ -55,7 +55,7 @@ data: {"type": "log", "step": "auto_editor", "message": "Rohausgabe ...", "perce
 | `error` | Fehler aufgetreten, Job beendet |
 | `log` | Rohausgabe eines Subprozesses (Auto-Editor, FFmpeg, create_tutorial.py) |
 | `throttled` | Modell überlastet (429/503); `data.alternatives` enthält alternative Provider/Modelle |
-| `debug` | Prompt-Details und Debugging-Informationen (nur Analyse/Rewrite) |
+| `debug` | Prompt-Details und Debugging-Informationen (Analyse, Rewrite, Handbuch-KI) |
 
 ---
 
@@ -131,7 +131,8 @@ Alle Felder außer `video_id` sind optional – Defaults aus `.env` werden verwe
 
 SSE-Events (über `/api/jobs/{job_id}/events`):
 - `log`: Rohausgabe von Auto-Editor (zeilenweise)
-- `completed`: `data.cut_video_path` enthält absoluten Pfad der Ausgabe
+- `progress`: beinhaltet vor dem Schnitt eine Audio-Decoder-Pruefung; bei `Decoder not found` wird automatisch eine AAC-kompatible Arbeitsdatei erzeugt und der Schnitt einmal wiederholt
+- `completed`: `data.cut_path` enthält absoluten Pfad der Ausgabe
 
 ---
 
@@ -201,6 +202,31 @@ Einzelnes Frame-Bild liefern.
 **Path-Parameter:** `filename` – z.B. `frame_001.jpg`
 
 **Response** `200 OK` – JPEG-Bild
+
+---
+
+### `PUT /api/videos/{video_id}/frames/{filename}`
+
+Bestehendes Frame-Bild ersetzen, z.B. nach Rotation, Zielformat-Anpassung oder Blur/Pixelate/Schwaerzen im Frame-Editor.
+
+**Body:** `multipart/form-data`
+- `file` – neues Bild (`image/jpeg`, `image/png`, `image/webp`, `image/gif`)
+
+**Response** `200 OK`
+```json
+{ "ok": true, "filename": "frame_001.jpg", "video_id": "..." }
+```
+
+---
+
+### `POST /api/videos/{video_id}/frames/upload`
+
+Eigene Bilder als Frames in einen bestehenden FrameStack hochladen.
+
+**Body:** `multipart/form-data`
+- `files` – mehrere Bilddateien
+
+**Response** `200 OK` – aktualisierter `FrameStack`
 
 ---
 
@@ -533,21 +559,20 @@ Projektstand aus ZIP wiederherstellen.
 
 ## Bilder (Bild-Modus)
 
-### `POST /api/images/upload`
+### `POST /api/upload/images`
 
 Mehrere Screenshots hochladen (Bild-Modus, kein Video).
 
 **Body:** `multipart/form-data`
-- `files` – Mehrere Bilddateien (JPEG, PNG)
-- `session_id` *(optional)* – UUID
+- `files` – Mehrere Bilddateien (JPEG, PNG, WebP, BMP)
 
 **Response** `200 OK`
 ```json
 {
   "session_id": "...",
   "images": [
-    { "filename": "screenshot_01.png", "width": 2560, "height": 1440 },
-    { "filename": "screenshot_02.png", "width": 2560, "height": 1440 }
+    { "image_id": "...", "filename": "screenshot_01.png", "width": 2560, "height": 1440 },
+    { "image_id": "...", "filename": "screenshot_02.png", "width": 2560, "height": 1440 }
   ]
 }
 ```
@@ -572,27 +597,32 @@ Hochgeladene Bilder auf einheitliche Größe bringen.
 
 **Response** `200 OK`
 ```json
-{ "session_id": "...", "message": "Normalisierung abgeschlossen" }
+{
+  "session_id": "...",
+  "images": [
+    { "image_id": "...", "filename": "....jpg", "width": 1920, "height": 1080 }
+  ]
+}
 ```
 
 ---
 
-### `POST /api/images/to-frames`
+### `POST /api/images/{session_id}/to-frames`
 
 Normalisierte Bilder in einen FrameStack umwandeln (Einstieg in den Video-Workflow).
 
-**Body:** `application/json`
-```json
-{
-  "session_id": "..."
-}
-```
+**Path-Parameter:** `session_id`
+
+**Body:** leer
 
 **Response** `200 OK`
 ```json
 {
   "video_id": "...",
-  "frame_count": 12
+  "total_frames": 12,
+  "frames": [
+    { "filename": "frame_001.jpg", "timestamp_seconds": 0.0, "scene_index": null }
+  ]
 }
 ```
 

@@ -43,7 +43,7 @@ Clip2Guide/
 │       │   ├── FrameStack.tsx         # Schritt 3: Frame-Auswahl
 │       │   ├── FrameCarousel.tsx      # Frame-Vorschau
 │       │   ├── CustomFrameCarousel.tsx
-│       │   ├── FrameEditor.tsx        # Einzelbild-Bearbeitung
+│       │   ├── FrameEditor.tsx        # Einzelbild-Bearbeitung: Rotation, Zielformat, Blur/Pixelate/Schwaerzen
 │       │   ├── SceneEditor.tsx        # Schritt 4: Storyboard-Editor
 │       │   ├── ImageStoryboard.tsx    # Storyboard-Vorschau
 │       │   ├── JsonPreview.tsx        # Rohes JSON anzeigen
@@ -66,7 +66,7 @@ Clip2Guide/
 │       │   ├── processing.py # POST /api/videos/{id}/normalize + /cut
 │       │   ├── frames.py     # POST /api/videos/{id}/extract-frames + GET frame-stack + GET frames/{filename} + PUT frames/{filename}
 │       │   ├── ai.py         # GET /api/ai/providers + /ai/models + POST /api/videos/{id}/analyze + /rewrite-scene + /enrich-scenes + GET/PUT storyboard
-│       │   ├── images.py     # POST /api/images/upload + /normalize + /to-frames
+│       │   ├── images.py     # POST /api/upload/images + /api/images/normalize + /api/images/{session_id}/to-frames
 │       │   └── render.py     # POST /api/videos/{id}/render + GET /api/videos/{id}/output/{filename}
 │       ├── services/
 │       │   ├── __init__.py
@@ -387,9 +387,9 @@ GET  /api/videos/{video_id}/manual/{filename}    → FileResponse (DOCX)
 POST /api/videos/{video_id}/export-project       → dict (ZIP Export)
 GET  /api/videos/{video_id}/project/{filename}   → FileResponse (ZIP)
 POST /api/projects/import                        → dict (ZIP Import)
-POST /api/images/upload                          → ImageSetResponse
+POST /api/upload/images                          → ImageSetResponse
 POST /api/images/normalize                       → dict
-POST /api/images/to-frames                       → dict
+POST /api/images/{session_id}/to-frames          → dict
 ```
 
 ---
@@ -652,8 +652,10 @@ USER_LOCAL_DIR: string
 
 - `frontend/src/components/FrameStack.tsx` zeigt nach vorhandener Frame-Extraktion einen lokalen `Szenen-Entwurf` an.
 - Der Entwurf wird aus der aktuellen `localSceneFrames`-Reihenfolge berechnet und aktualisiert sich dadurch bei Split, Merge, Drag-and-drop und eigener Frame-Auswahl ohne Backend-Aufruf.
-- Szenen koennen im Entwurf hinzugefuegt, geloescht und per Pfeil-Buttons oder Drag-and-drop verschoben werden. Beim Loeschen einer Szene mit Bildern werden die Bilder in eine Nachbarszene uebernommen, damit keine Frames versehentlich verloren gehen.
+- Szenen koennen im Entwurf hinzugefuegt, geloescht und per Pfeil-Buttons oder Drag-and-drop verschoben werden. Beim Loeschen einer Szene mit Bildern werden die Bilder in `customFrames` / `Eigene Auswahl` uebernommen, damit der Entwurf auch komplett auf null Szenen geleert und spaeter aus der Auswahl neu aufgebaut werden kann.
 - Bilder koennen direkt im Entwurf per Drag-and-drop innerhalb einer Szene neu sortiert oder in eine andere Szene verschoben werden. Leere Szenen bleiben in `localSceneFrames` erhalten, damit sie als Drop-Ziel dienen koennen.
+- Bilder aus `Eigene Auswahl` koennen per Drag-and-drop in eine Szene eingefuegt werden. Dabei wird das Bild aus anderen Szenen entfernt, damit ein Frame nicht versehentlich doppelt in mehreren Szenen landet.
+- Wenn ein Frame im Szenen-Carousel aktiv ist, meldet `FrameCarousel` den aktuellen Index an `FrameStack`. Der aktive Frame wird im Szenen-Entwurf und im Szenenraster mit hellem rotem Rand markiert, auch wenn der Nutzer im Carousel per Vor/Zurueck wechselt.
 - Pro Szene kann im Entwurf eine kurze Beschreibung gepflegt werden, pro Bild eine KI-Anweisung. `FrameStack` uebergibt diese Werte als `StoryboardDraftHints` an `App`, `SceneEditor` reicht sie an `api.analyzeVideo()` weiter.
 - `SceneEditor` fasst vor der Analyse die uebergebenen `sceneGroups` unten als `Storyboard-Zusammenfassung` zusammen. Die Karten zeigen Frames je Szene, Szenenbeschreibung und Markierungen fuer Frames mit KI-Anweisung.
 - `SceneEditor` bietet vor der initialen Analyse einen allgemein vorangestellten Master-Prompt an. Dieser wird als `StoryboardDraftHints.masterPrompt` an `api.analyzeVideo()` weitergereicht und als `AnalyzeRequest.master_prompt` an das Backend gesendet.

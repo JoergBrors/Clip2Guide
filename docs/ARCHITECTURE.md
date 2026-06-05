@@ -19,7 +19,7 @@ Schichten, die ausschließlich lokal auf dem Rechner des Benutzers laufen:
                │ localhost:8787
 ┌──────────────▼───────────────────────────────────────────────────┐
 │               FastAPI Backend (Python 3.13 / uvicorn)            │
-│  upload │ processing │ frames │ ai │ images │ render             │
+│  upload │ processing │ frames │ ai │ images │ render │ projects  │
 └──────────────────────────────────────────────────────────────────┘
                │ subprocess / sys.executable
 ┌──────────────▼───────────────────────────────────────────────────┐
@@ -58,7 +58,7 @@ Clip2Guide/
 │       │   ├── FrameStack.tsx        # Schritt 3: Frame-Extraktion + Auswahl
 │       │   ├── FrameCarousel.tsx     # Frame-Vorschau (Karussell)
 │       │   ├── CustomFrameCarousel.tsx
-│       │   ├── FrameEditor.tsx       # Einzelbild-Bearbeitung
+│       │   ├── FrameEditor.tsx       # Einzelbild-Bearbeitung: Rotation, Format, Blur/Pixelate/Schwaerzen
 │       │   ├── SceneEditor.tsx       # Schritt 4: Storyboard bearbeiten
 │       │   ├── ImageStoryboard.tsx   # Storyboard-Vorschau
 │       │   ├── JsonPreview.tsx       # Rohes JSON anzeigen
@@ -81,8 +81,9 @@ Clip2Guide/
 │       │   ├── processing.py         # POST /api/videos/{id}/normalize + /cut
 │       │   ├── frames.py             # POST /api/videos/{id}/extract-frames
 │       │   ├── ai.py                 # POST /api/videos/{id}/analyze + Storyboard-CRUD
-│       │   ├── images.py             # POST /api/images/upload (Bild-Modus)
-│       │   └── render.py             # POST /api/videos/{id}/render
+│       │   ├── images.py             # POST /api/upload/images + Bild-Normalisierung
+│       │   ├── render.py             # POST /api/videos/{id}/render
+│       │   └── projects.py           # Projekt-ZIP Export/Import
 │       ├── services/                 # Fachlogik, ohne HTTP-Wissen
 │       │   ├── __init__.py
 │       │   ├── ai_provider_base.py   # Abstrakte Basisklasse AiProviderBase (ABC)
@@ -117,7 +118,8 @@ Clip2Guide/
 │   ├── cut/                          # Auto-Editor-Ergebnisse
 │   ├── frames/                       # Extrahierte JPG-Frames (pro video_id/)
 │   ├── ai-output/                    # storyboard.json + frame_stack.json (pro video_id/)
-│   ├── output/                       # Fertige Tutorial-Videos (pro video_id/)
+│   ├── output/                       # Fertige Videos, DOCX-Handbuecher, Projekt-ZIPs (pro video_id/)
+│   ├── tmp/                          # Temporaere Arbeitsdateien, wird beim Backend-Start bereinigt
 │   └── logs/
 │
 ├── icon/                             # App-Icons (PNG-Quellen, .icns wird im CI gebaut)
@@ -152,6 +154,7 @@ Benutzer
   ▼
 [2] Verarbeitung (optional: Auto-Editor-Schnitt)
     POST /api/videos/{id}/cut
+    → FFmpeg-Audio-Decode-Pruefung; bei Bedarf AAC-kompatible Temp-Eingabe
     → auto-editor-binary: Stille / Bewegung entfernen
     → Ausgabe: workspace/cut/{video_id}.mp4
     POST /api/videos/{id}/normalize
@@ -168,8 +171,10 @@ Benutzer
   │
   ▼
 [3b] Frame-Auswahl im UI
-    Benutzer wählt / abwählt Frames
-    → selected_frames-Liste wird an Analyse übergeben
+    Benutzer entwirft Szenen, loescht/verschiebt Szenen, sortiert Bilder per Drag-and-drop
+    → geloeschte Szenen legen Bilder in "Eigene Auswahl"; Bilder koennen daraus neu eingefuegt werden
+    → FrameEditor: Rotation, Ziel-Frame-Format (z.B. 16:3), Crop/Fit/Stretch, Blur/Pixelate/Schwaerzen
+    → selected_frames, scene_groups, scene_descriptions und image_prompts werden an Analyse uebergeben
   │
   ▼
 [4] KI-Analyse
@@ -214,7 +219,7 @@ mit dem Video-Modus.
 
 ```
 [1] Upload mehrerer Bilder
-    POST /api/images/upload (multipart, mehrere files)
+    POST /api/upload/images (multipart, mehrere files)
     → session_id + ImageInfo-Liste
 
 [2] Größenanpassung
@@ -223,7 +228,7 @@ mit dem Video-Modus.
     → Zielgröße: target_width × target_height
 
 [3] Bilder → FrameStack
-    POST /api/images/to-frames
+    POST /api/images/{session_id}/to-frames
     → synthetische video_id, frame_stack.json
 
 → ab hier identisch mit Video-Modus Schritt 3b
@@ -243,7 +248,11 @@ Alle Artefakte einer Verarbeitungssitzung leben unter derselben UUID:
 | `workspace/frames/{uuid}/frame_NNN.jpg` | Extrahierte Frames | frames.py |
 | `workspace/ai-output/{uuid}/frame_stack.json` | Frame-Metadaten | frames.py |
 | `workspace/ai-output/{uuid}/storyboard.json` | KI-Storyboard (editierbar) | ai.py |
+| `workspace/ai-output/{uuid}/manual_storyboard_{lang}.json` | Handbuch-optimiertes Storyboard | manual_render_service.py |
 | `workspace/output/{uuid}/tutorial_{lang}.mp4` | Fertiges Tutorial | render.py |
+| `workspace/output/{uuid}/manual_{lang}.docx` | Fertiges DOCX-Handbuch | manual_render_service.py |
+| `workspace/output/{uuid}/project_{uuid}.zip` | Projektarchiv | project_archive_service.py |
+| `workspace/tmp/` | Temporaere Export-/Auto-Editor-Arbeitsdateien, Startup-Cleanup | main.py / services |
 
 ---
 
@@ -280,7 +289,7 @@ data: {"type":"error","step":"...","message":"Fehlermeldung","percent":0}
 Keepalive alle 15 Sekunden: `: keepalive\n\n`
 Timeout nach 3600 Sekunden: automatisches `error`-Event.
 
-Event-Typen: `progress` | `completed` | `error` | `log` | `throttled`
+Event-Typen: `progress` | `completed` | `error` | `log` | `throttled` | `debug`
 
 ---
 

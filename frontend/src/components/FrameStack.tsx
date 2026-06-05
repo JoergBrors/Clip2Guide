@@ -35,6 +35,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
   const [hoveredThumb, setHoveredThumb] = useState<string | null>(null);
   // Carousel: Startindex pro Szene (gesetzt wenn Thumbnail angeklickt wird)
   const [carouselInitialIndex, setCarouselInitialIndex] = useState<number>(0);
+  const [carouselActiveFrame, setCarouselActiveFrame] = useState<Record<number, string>>({});
 
   // Lokale Reihenfolge pro Szene (per Drag & Drop umsortierbar)
   const [localSceneFrames, setLocalSceneFrames] = useState<Map<number, FrameInfo[]>>(new Map());
@@ -43,6 +44,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
   const [frameEditError, setFrameEditError] = useState<string | null>(null);
   // Drag-Zustand für das Szenenraster
   const [sceneDragInfo, setSceneDragInfo] = useState<{ sceneIdx: number; frameIdx: number } | null>(null);
+  const [paletteDragFilename, setPaletteDragFilename] = useState<string | null>(null);
   const [sceneDragOver, setSceneDragOver] = useState<{ sceneIdx: number; frameIdx: number } | null>(null);
   // Cross-Szenen-Drag (welche Szenen-Karte ist Ziel)
   const [sceneCrossDragOver, setSceneCrossDragOver] = useState<number | null>(null);
@@ -172,6 +174,14 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
     setLocalSceneFrames(new Map(localSceneFrames).set(sceneIdx, next));
   }
 
+  function addFramesToCustom(frames: FrameInfo[]) {
+    if (!frames.length) return;
+    setCustomFrames((prev) => {
+      const existing = new Set(prev.map((f) => f.filename));
+      return [...prev, ...frames.filter((f) => !existing.has(f.filename))];
+    });
+  }
+
   // ── Szenen-Gruppen-Operationen ─────────────────────────────────────────────
 
   function applySceneEntries(entries: Array<[number, FrameInfo[]]>, descriptions = sceneDescriptions) {
@@ -196,6 +206,23 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
         return [key, frames] as [number, FrameInfo[]];
       })
     applySceneEntries(allEntries);
+  }
+
+  function insertPaletteFrameIntoScene(toKey: number, filename: string, toIdx?: number) {
+    const frame = customFrames.find((f) => f.filename === filename)
+      ?? frameStack?.frames.find((f) => f.filename === filename);
+    if (!frame) return;
+    const allEntries = Array.from(localSceneFrames.entries()).sort((a, b) => a[0] - b[0]);
+    const nextEntries = (allEntries.length > 0 ? allEntries : [[0, []] as [number, FrameInfo[]]])
+      .map(([key, frames]) => [key, frames.filter((f) => f.filename !== filename)] as [number, FrameInfo[]]);
+    const targetIdx = nextEntries.findIndex(([key]) => key === toKey);
+    if (targetIdx < 0) return;
+    const [key, frames] = nextEntries[targetIdx];
+    const nextFrames = [...frames];
+    const insertAt = toIdx === undefined ? nextFrames.length : Math.max(0, Math.min(toIdx, nextFrames.length));
+    nextFrames.splice(insertAt, 0, frame);
+    nextEntries[targetIdx] = [key, nextFrames];
+    applySceneEntries(nextEntries);
   }
 
   function reorderFrame(sceneKey: number, fromIdx: number, toIdx: number) {
@@ -242,21 +269,16 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
 
   function deleteScene(sceneKey: number) {
     const allEntries = Array.from(localSceneFrames.entries()).sort((a, b) => a[0] - b[0]);
-    if (allEntries.length <= 1) {
-      setLocalSceneFrames(new Map([[0, []]]));
-      setSceneDescriptions({ 0: "" });
-      setSelectedScene(null);
-      return;
-    }
-
     const deletePos = allEntries.findIndex(([key]) => key === sceneKey);
     if (deletePos < 0) return;
     const [, framesToKeep] = allEntries[deletePos];
+    addFramesToCustom(framesToKeep);
     const remaining = allEntries.filter((_, index) => index !== deletePos);
-    if (framesToKeep.length > 0) {
-      const targetPos = Math.max(0, deletePos - 1);
-      const [targetKey, targetFrames] = remaining[targetPos];
-      remaining[targetPos] = [targetKey, [...targetFrames, ...framesToKeep]];
+    if (remaining.length === 0) {
+      setLocalSceneFrames(new Map());
+      setSceneDescriptions({});
+      setSelectedScene(null);
+      return;
     }
     applySceneEntries(remaining);
     setSelectedScene((prev) => prev === sceneKey ? null : prev);
@@ -327,18 +349,9 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
     }
   }
 
-  // Frames nach Szene gruppieren
-  const scenes: Map<number, FrameInfo[]> = localSceneFrames.size > 0 ? localSceneFrames : (() => {
-    const m = new Map<number, FrameInfo[]>();
-    if (frameStack) {
-      for (const f of frameStack.frames) {
-        const s = f.scene_index ?? 0;
-        if (!m.has(s)) m.set(s, []);
-        m.get(s)!.push(f);
-      }
-    }
-    return m;
-  })();
+  // Frames nach Szene gruppieren. Ein leerer Map ist ein gueltiger Zustand:
+  // Alle Szenen koennen geloescht und spaeter aus der Auswahl neu aufgebaut werden.
+  const scenes: Map<number, FrameInfo[]> = localSceneFrames;
   const sortedScenes = Array.from(scenes.entries()).sort((a, b) => a[0] - b[0]);
 
   function formatTime(seconds: number): string {
@@ -477,7 +490,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
               </button>
             </div>
 
-            {sortedScenes.length > 0 && (
+            {frameStack && (
               <div
                 style={{
                   marginTop: 14,
@@ -512,9 +525,10 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                       <div
                         key={sceneIdx}
                         onDragOver={(e) => {
-                          if (draftSceneDragKey !== null || sceneDragInfo) {
+                          if (draftSceneDragKey !== null || sceneDragInfo || paletteDragFilename) {
                             e.preventDefault();
                             if (sceneDragInfo && sceneDragInfo.sceneIdx !== sceneIdx) setSceneCrossDragOver(sceneIdx);
+                            if (paletteDragFilename) setSceneCrossDragOver(sceneIdx);
                           }
                         }}
                         onDragLeave={(e) => {
@@ -523,6 +537,11 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                         onDrop={(e) => {
                           e.preventDefault();
                           setSceneCrossDragOver(null);
+                          if (paletteDragFilename) {
+                            insertPaletteFrameIntoScene(sceneIdx, paletteDragFilename);
+                            setPaletteDragFilename(null);
+                            return;
+                          }
                           if (sceneDragInfo && sceneDragInfo.sceneIdx !== sceneIdx) {
                             const srcFrames = localSceneFrames.get(sceneDragInfo.sceneIdx) ?? [];
                             const fn = srcFrames[sceneDragInfo.frameIdx]?.filename;
@@ -593,7 +612,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                             className="btn btn-ghost"
                             style={{ fontSize: 10, padding: "1px 6px", color: "#ef9090" }}
                             onClick={() => deleteScene(sceneIdx)}
-                            title={frames.length > 0 ? "Szene loeschen und Bilder in die vorherige Szene uebernehmen" : "Leere Szene loeschen"}
+                            title={frames.length > 0 ? "Szene loeschen und Bilder in die eigene Auswahl legen" : "Leere Szene loeschen"}
                           >
                             ×
                           </button>
@@ -607,6 +626,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                           {frames.map((f, frameIdx) => {
                             const isDragging = sceneDragInfo?.sceneIdx === sceneIdx && sceneDragInfo.frameIdx === frameIdx;
                             const isDropTarget = sceneDragOver?.sceneIdx === sceneIdx && sceneDragOver.frameIdx === frameIdx;
+                            const isCarouselActive = carouselActiveFrame[sceneIdx] === f.filename;
                             return (
                             <div
                               key={f.filename}
@@ -623,20 +643,27 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                                 e.stopPropagation();
                                 if (sceneDragInfo?.sceneIdx === sceneIdx) {
                                   reorderFrame(sceneIdx, sceneDragInfo.frameIdx, frameIdx);
+                                } else if (paletteDragFilename) {
+                                  insertPaletteFrameIntoScene(sceneIdx, paletteDragFilename, frameIdx);
                                 } else if (sceneDragInfo) {
                                   const srcFrames = localSceneFrames.get(sceneDragInfo.sceneIdx) ?? [];
                                   const fn = srcFrames[sceneDragInfo.frameIdx]?.filename;
                                   if (fn) moveFrameBetweenScenes(sceneDragInfo.sceneIdx, sceneIdx, fn);
                                 }
                                 setSceneDragInfo(null);
+                                setPaletteDragFilename(null);
                                 setSceneDragOver(null);
                               }}
-                              onDragEnd={() => { setSceneDragInfo(null); setSceneDragOver(null); }}
+                              onDragEnd={() => { setSceneDragInfo(null); setPaletteDragFilename(null); setSceneDragOver(null); }}
                               style={{
                                 position: "relative",
                                 cursor: "grab",
-                                outline: isDropTarget ? "2px solid #4fc3f7" : "none",
-                                outlineOffset: 1,
+                                outline: isDropTarget
+                                  ? "2px solid #4fc3f7"
+                                  : isCarouselActive
+                                    ? "3px solid #ff8a80"
+                                    : "none",
+                                outlineOffset: isCarouselActive ? 3 : 1,
                                 opacity: isDragging ? 0.35 : 1,
                               }}
                             >
@@ -649,7 +676,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                                   height: 30,
                                   objectFit: "cover",
                                   borderRadius: 3,
-                                  border: "1px solid #2a4a6a",
+                                  border: isCarouselActive ? "1px solid #ffcdd2" : "1px solid #2a4a6a",
                                   display: "block",
                                 }}
                                 loading="lazy"
@@ -721,6 +748,18 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                       </div>
                     );
                   })}
+                  {sortedScenes.length === 0 && (
+                    <div
+                      style={{
+                        color: "#6f8aa5",
+                        fontSize: 12,
+                        fontStyle: "italic",
+                        padding: "10px 2px",
+                      }}
+                    >
+                      Keine Szenen im Entwurf. Lege mit + Szene eine neue Szene an und ziehe Bilder aus der eigenen Auswahl hinein.
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -745,19 +784,34 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                 </span>
                 <div style={{ display: "flex", gap: 4, overflowX: "auto", flex: 1, minWidth: 0 }}>
                   {customFrames.slice(0, 12).map((f, i) => (
-                    <img
+                    <div
                       key={f.filename}
-                      src={f.dataUrl ?? api.frameImageUrl(videoId, f.filename)}
-                      alt={`Auswahl ${i + 1}`}
+                      draggable
+                      onDragStart={(e) => {
+                        setPaletteDragFilename(f.filename);
+                        e.dataTransfer.effectAllowed = "copy";
+                      }}
+                      onDragEnd={() => setPaletteDragFilename(null)}
+                      title="In eine Szene ziehen"
                       style={{
-                        width: 48,
-                        height: 27,
-                        objectFit: "cover",
-                        borderRadius: 3,
-                        border: "1px solid #4fc3f7",
+                        cursor: "grab",
                         flexShrink: 0,
                       }}
-                    />
+                    >
+                      <img
+                        src={f.dataUrl ?? api.frameImageUrl(videoId, f.filename)}
+                        alt={`Auswahl ${i + 1}`}
+                        draggable={false}
+                        style={{
+                          width: 48,
+                          height: 27,
+                          objectFit: "cover",
+                          borderRadius: 3,
+                          border: paletteDragFilename === f.filename ? "2px solid #4fc3f7" : "1px solid #4fc3f7",
+                          display: "block",
+                        }}
+                      />
+                    </div>
                   ))}
                   {customFrames.length > 12 && (
                     <span style={{ color: "#666", fontSize: 11, alignSelf: "center", flexShrink: 0 }}>
@@ -903,6 +957,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                     const isDragOver = sceneDragOver?.sceneIdx === sceneIdx && sceneDragOver?.frameIdx === actualIdx && sceneDragInfo?.frameIdx !== actualIdx;
                     const isSelected = customFilenames.has(f.filename);
                     const isHovered = hoveredThumb === f.filename && !sceneDragInfo;
+                    const isCarouselActive = carouselActiveFrame[sceneIdx] === f.filename;
                     const frameSrc = f.dataUrl ?? api.frameImageUrl(videoId, f.filename);
                     return (
                       <div
@@ -912,8 +967,14 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                           position: "relative",
                           cursor: selectionMode ? "pointer" : sceneDragInfo?.sceneIdx === sceneIdx ? "grabbing" : "pointer",
                           borderRadius: 4,
-                          outline: isDragOver ? "2px solid #4fc3f7" : isSelected ? "2px solid #4fc3f7" : "none",
-                          outlineOffset: isDragOver ? 3 : 1,
+                          outline: isDragOver
+                            ? "2px solid #4fc3f7"
+                            : isCarouselActive
+                              ? "3px solid #ff8a80"
+                              : isSelected
+                                ? "2px solid #4fc3f7"
+                                : "none",
+                          outlineOffset: isDragOver || isCarouselActive ? 3 : 1,
                           zIndex: isHovered ? 20 : 1,
                           opacity: isDragging ? 0.35 : 1,
                           transition: "opacity 0.15s",
@@ -925,6 +986,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                             // Carousel oeffnen und zum angeklickten Frame springen
                             setSelectedScene(sceneIdx);
                             setCarouselInitialIndex(actualIdx);
+                            setCarouselActiveFrame((prev) => ({ ...prev, [sceneIdx]: f.filename }));
                           }
                         }}
                         onDragStart={(e) => handleSceneFrameDragStart(e, sceneIdx, actualIdx)}
@@ -944,7 +1006,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                             height: 62,
                             objectFit: "cover",
                             borderRadius: 4,
-                            border: "1px solid #333",
+                            border: isCarouselActive ? "1px solid #ffcdd2" : "1px solid #333",
                             display: "block",
                             opacity: selectionMode && !isSelected ? 0.5 : 1,
                             transition: "opacity 0.15s",
@@ -1101,6 +1163,9 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                       onAddToCustom={addToCustom}
                       customFrameFilenames={customFilenames}
                       initialIndex={carouselInitialIndex}
+                      onIndexChange={(_, frame) => {
+                        setCarouselActiveFrame((prev) => ({ ...prev, [sceneIdx]: frame.filename }));
+                      }}
                     />
                   </div>
                 )}

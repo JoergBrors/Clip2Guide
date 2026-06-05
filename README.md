@@ -1,6 +1,6 @@
 # Clip2Guide
 
-Automatische Tutorial-Erstellung aus Bildschirmaufnahmen.
+Automatische Tutorial-Erstellung aus Bildschirmaufnahmen oder Bildserien.
 
 **Electron + React/TypeScript Frontend · Python FastAPI Backend**
 
@@ -42,7 +42,7 @@ Bearbeite die erzeugte `.env`-Datei:
 |---|---|
 | `GEMINI_API_KEY` | Google Gemini API-Schlüssel |
 | `OPENAI_API_KEY` | OpenAI API-Schlüssel (alternativ) |
-| `AI_PROVIDER` | `gemini` oder `openai` |
+| `AI_PROVIDER` | Kommagetrennte Provider-Liste: `gemini`, `openai`, `azure_openai`, `azure_cognitive` |
 | `FFMPEG_PATH` | Pfad zu `ffmpeg.exe` / `ffmpeg` |
 | `FFPROBE_PATH` | Pfad zu `ffprobe.exe` / `ffprobe` |
 | `AUTO_EDITOR_PATH` | Pfad zum Auto-Editor-Binary |
@@ -78,11 +78,11 @@ npm run dev:electron
 
 ## Workflow
 
-1. **Upload** — Bildschirmaufnahme hochladen (MP4, MOV, AVI, MKV, WebM)
-2. **Verarbeitung** — Normalisierung + automatischer Schnitt mit Auto-Editor
-3. **Frames** — Schlüsselframes extrahieren und nach Szenen gruppieren
-4. **Storyboard** — KI-Analyse (Gemini / OpenAI) → Texte bearbeiten
-5. **Rendering** — Tutorial-Videos mit Text-Panels und TTS-Audio generieren
+1. **Upload** — Video hochladen, Bilder hochladen oder Projekt-ZIP wiederherstellen
+2. **Verarbeitung** — optionaler Auto-Editor-Schnitt mit Decode-Pruefung, danach Normalisierung
+3. **Frames** — Schluesselframes extrahieren, Bilder hochladen, Szenen entwerfen, Frames rotieren/an Zielformat anpassen
+4. **Storyboard** — KI-Analyse (Gemini / OpenAI / Azure) mit Master-Prompt, Szenenbeschreibungen und Bild-Anweisungen
+5. **Rendering** — Tutorial-Video, DOCX-Handbuch oder beides generieren; Projektstand als ZIP sichern
 
 ---
 
@@ -94,10 +94,10 @@ Clip2Guide/
 │   ├── app/
 │   │   ├── config.py          # Einstellungen via .env
 │   │   ├── models.py          # Pydantic-Modelle
-│   │   ├── job_store.py       # WebSocket-Job-Queues
-│   │   ├── main.py            # FastAPI-App + WebSocket
-│   │   ├── routers/           # 5 API-Router
-│   │   ├── services/          # 11 Dienste (FFmpeg, KI, Render …)
+│   │   ├── job_store.py       # SSE-Job-Queues
+│   │   ├── main.py            # FastAPI-App + SSE + Startup-Cache-Cleanup
+│   │   ├── routers/           # Upload, Verarbeitung, Frames, KI, Bilder, Rendering, Projekte
+│   │   ├── services/          # FFmpeg, KI, Render, Handbuch, Projektarchiv …
 │   │   └── scripts/
 │   │       └── create_tutorial.py  # Tutorial-Renderer (MoviePy)
 │   └── requirements.txt
@@ -110,13 +110,13 @@ Clip2Guide/
 │   │   ├── App.tsx            # Wizard-Shell
 │   │   ├── api/
 │   │   │   └── backendClient.ts
-│   │   ├── components/        # 7 React-Komponenten
+│   │   ├── components/        # React-Komponenten fuer Workflow, Editor, Rendering, Setup
 │   │   └── styles/
 │   │       └── accessibility.css
 │   └── index.html
 ├── tools/                     # FFmpeg, Auto-Editor (von initial.* befüllt)
 ├── workspace/                 # Arbeitsverzeichnis (Uploads, Frames, Output …)
-├── .env.example
+├── localstuff/env.example
 ├── initial.ps1                # Windows-Setup
 ├── initial.sh                 # macOS/Linux-Setup
 ├── package.json

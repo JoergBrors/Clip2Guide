@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api, FrameInfo } from "../api/backendClient";
 
 interface Props {
@@ -7,16 +7,26 @@ interface Props {
   onAddToCustom?: (frame: FrameInfo) => void;
   customFrameFilenames?: Set<string>;
   initialIndex?: number;
+  onIndexChange?: (index: number, frame: FrameInfo) => void;
 }
 
-export default function FrameCarousel({ videoId, frames, onAddToCustom, customFrameFilenames, initialIndex }: Props): React.ReactElement {
+export default function FrameCarousel({ videoId, frames, onAddToCustom, customFrameFilenames, initialIndex, onIndexChange }: Props): React.ReactElement {
   const [idx, setIdx] = useState(initialIndex ?? 0);
   const [hovered, setHovered] = useState(false);
+  const onIndexChangeRef = useRef(onIndexChange);
+
+  useEffect(() => {
+    onIndexChangeRef.current = onIndexChange;
+  }, [onIndexChange]);
 
   useEffect(() => {
     if (initialIndex !== undefined) setIdx(Math.min(initialIndex, frames.length - 1));
   }, [initialIndex, frames.length]);
   const current = frames[idx];
+
+  useEffect(() => {
+    if (current) onIndexChangeRef.current?.(idx, current);
+  }, [idx, current]);
 
   if (!frames.length) return <p style={{ color: "#aaa" }}>Keine Frames vorhanden.</p>;
 

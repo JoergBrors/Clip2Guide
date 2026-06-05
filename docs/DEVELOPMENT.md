@@ -184,6 +184,13 @@ Das Projekt verwendet **zwei separate** `tsconfig.json`-Dateien.
 - Download: `GET /api/videos/{video_id}/project/{filename}`
 - Import: `POST /api/projects/import` mit ZIP-Datei und `restore_mode=new_id|overwrite`
 - Der Import validiert Manifest, Pfade und SHA256-Pruefsummen und schreibt nur in erwartete Workspace-Verzeichnisse.
+- Die UI bietet Restore im Upload-Schritt und im Rendering-Schritt an; nach erfolgreichem Import springt sie direkt zum Storyboard.
+
+### Frame-Editor erweitern
+
+- `frontend/src/components/FrameEditor.tsx` speichert Aenderungen per `PUT /api/videos/{video_id}/frames/{filename}`.
+- Der Editor rendert Rotation und Ziel-Frame-Format direkt in das Frame-Bild. Modi entsprechen `ImageAdjust`: `crop`, `fit`, `stretch`.
+- Nach dem Speichern aktualisiert `FrameStack` lokale Vorschauen und verhindert eine sofortige Rekonstruktion aus alten `scene_index`-Werten.
 
 ### Neuen Workflow-Schritt im Frontend hinzufügen
 
@@ -239,9 +246,11 @@ Siehe [RELEASE.md](RELEASE.md).
 
 ### Daten-Lebensdauer
 
-Der `workspace/`-Ordner enthält alle Laufzeit-Daten. Er wird **nicht** bereinigt,
-da der Benutzer auf frühere Ergebnisse zugreifen können soll. Für Tests ist
-manuelles Löschen oder ein separates `WORKSPACE_DIR` in `.env` sinnvoll.
+Der `workspace/`-Ordner enthält alle Laufzeit-Daten. Persistente Bereiche
+(`uploads`, `frames`, `ai-output`, `output`, `cut`, `normalized`) werden **nicht**
+automatisch bereinigt, da der Benutzer auf frühere Ergebnisse zugreifen können soll.
+`workspace/tmp/` wird beim Backend-Start automatisch geleert, damit alte Export- oder
+Auto-Editor-Fragmente keine neuen Läufe beeinflussen.
 
 ### Backend-Neustart im Dev-Modus
 
