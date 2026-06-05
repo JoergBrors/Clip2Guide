@@ -9,9 +9,12 @@ Die Version der App wird über den Git-Tag gesteuert und automatisch synchronisi
 
 electron-builder liest die Version aus `package.json` und verwendet sie für:
 
-- Installer-Dateinamen (`Clip2Guide Setup {version}.exe`, `Clip2Guide-{version}-arm64.pkg`)
 - In-App-Versionsnummer (`window.clip2guide.getVersion()`)
 - GitHub-Release-Tag
+
+> **Dateinamen enthalten keine Versionsnummer.** Die drei Installer heißen immer:
+> `Clip2Guide-Setup-win-x64.exe`, `Clip2Guide-Portable-win-x64.exe`, `Clip2Guide-mac-arm64.pkg`.
+> Die Version ist im GitHub-Release-Tag und in der App selbst sichtbar.
 
 ---
 
@@ -37,24 +40,24 @@ Der Workflow besteht aus zwei Phasen: **Build** (Matrix) → **Publish**.
 
 #### Phase 1: Build-Matrix
 
-| Matrix-Eintrag | Runner | Befehl | Artefakt-Name |
-| --- | --- | --- | --- |
-| `win x64` | `windows-latest` | `npx electron-builder --win --x64 --publish never` | `installer-win-x64` |
-| `mac arm64` | `macos-latest` | `npx electron-builder --mac --arm64 --publish never` | `installer-mac-arm64` |
+| Matrix-Eintrag | Runner | Artefakt-Name (GitHub Actions) |
+| --- | --- | --- |
+| `win x64` | `windows-latest` | `installer-win-x64` |
+| `mac arm64` | `macos-latest` | `installer-mac-arm64` |
 
 > **Nur arm64 für macOS:** Die App wird ausschließlich nativ für Apple Silicon gebaut.
-> Ein x64-Build via Rosetta-Cross-Compilation wird nicht mehr erzeugt.
+> Ein x64-Build via Rosetta-Cross-Compilation wird nicht erzeugt.
 
 #### Build-Schritte (alle Plattformen)
 
 1. `actions/checkout@v4`
 2. `actions/setup-node@v4` (Node.js 20)
-3. **Version synchronisieren**: Tag `v0.3.4` → `npm version 0.3.4 --no-git-tag-version` → `package.json`
+3. **Version synchronisieren**: Tag `v1.2.3` → `npm version 1.2.3 --no-git-tag-version` → `package.json`
 4. `npm ci`
 5. `npm run build` (Vite + Electron TypeScript)
 6. *(macOS only)* Icon erzeugen + Ad-hoc Signierung vor und nach dem Packaging
 7. `npx electron-builder --{platform} --{arch} --publish never`
-8. `actions/upload-artifact@v4` – Installer-Dateien hochladen
+8. `actions/upload-artifact@v4` – Installer-Dateien hochladen (feste Namen, keine Version)
 
 > **Versions-Synchronisation**: `package.json` muss vor einem Release-Tag **nicht** manuell
 > angepasst werden. Der CI-Schritt überschreibt die Version automatisch aus dem Tag.
@@ -73,12 +76,15 @@ Läuft erst, wenn **alle** Build-Jobs erfolgreich waren.
 Schritte:
 
 1. Artefakte aller Matrix-Jobs herunterladen
-2. `ncipollo/release-action@v1` – GitHub Release mit allen Installer-Dateien erstellen
+2. `ncipollo/release-action@v1` – GitHub Release mit allen drei Installer-Dateien erstellen
 
-**GitHub Release enthält:**
+**GitHub Release enthält (feste Dateinamen):**
 
-- `Clip2Guide Setup {version}.exe` (Windows x64 NSIS-Installer)
-- `Clip2Guide-{version}-arm64.pkg` (macOS arm64 / Apple Silicon PKG-Installer)
+| Datei | Beschreibung |
+| --- | --- |
+| `Clip2Guide-Setup-win-x64.exe` | Windows x64 NSIS-Installer |
+| `Clip2Guide-Portable-win-x64.exe` | Windows x64 Portable (kein Setup nötig) |
+| `Clip2Guide-mac-arm64.pkg` | macOS arm64 / Apple Silicon PKG-Installer |
 
 ---
 
@@ -142,30 +148,39 @@ asarUnpack:
   - "**/*.dylib"
 
 win:
+  executableName: clip2guide
   target:
     - target: nsis
       arch: [x64]
-  artifactName: "Clip2Guide-${version}-${arch}-${os}.${ext}"
+    - target: portable
+      arch: [x64]
 
 nsis:
   oneClick: false
+  perMachine: true
   allowToChangeInstallationDirectory: true
+  artifactName: "Clip2Guide-Setup-win-x64.${ext}"
+
+portable:
+  artifactName: "Clip2Guide-Portable-win-x64.${ext}"
 
 mac:
   target:
     - target: pkg
+  artifactName: "Clip2Guide-mac-arm64.${ext}"
   icon: icon/icon.icns
   hardenedRuntime: false
   gatekeeperAssess: false
-  artifactName: "Clip2Guide-${version}-arm64.${ext}"
 ```
 
-### Wichtige Hinweise zur macOS-Konfiguration
+### Wichtige Hinweise zur Paketierung
 
-- **Format: `pkg`** statt `dmg` – der macOS-Installer verarbeitet das PKG nativ und
+- **Keine Versionsnummer im Dateinamen** – alle drei Installer haben feste Namen.
+  Die Version ist im GitHub-Release-Tag und in der App (`Einstellungen → Debug`) sichtbar.
+- **Windows Portable**: kein Setup nötig, direkt ausführbar. Empfohlen wenn SmartScreen
+  den Installer blockiert.
+- **macOS Format: `pkg`** statt `dmg` – der macOS-Installer verarbeitet das PKG nativ und
   umgeht das Quarantine-/Gatekeeper-„App ist beschädigt"-Problem.
-- **`artifactName`**: `Clip2Guide-${version}-arm64.pkg` – Version und Architektur
-  sind explizit im Dateinamen codiert.
 - **`hardenedRuntime: false`**: Die App ist **nicht** von Apple notarisiert.
   Benutzer müssen beim ersten Start Rechtsklick → „Öffnen" verwenden.
 - **Kein Apple-Developer-Konto** / kein Notarisierungsprozess konfiguriert.
@@ -173,8 +188,7 @@ mac:
 - **Ad-hoc Signierung** im CI vor und nach dem Packaging:
   `codesign --deep --force --sign -` auf die `.app`.
 - **`extraResources`**: `initial.sh`, `initial.ps1`, `env.example` und `backend/requirements.txt`
-  landen unter `resources/` in der paketierten App. Das Setup-Skript und `requirements.txt`
-  sind damit auch ohne ASAR-Entpacken zugänglich.
+  landen unter `resources/` in der paketierten App.
 - **`asarUnpack`**: Alle `.py`, `.pyd`, `.so`, `.dylib` Dateien werden aus dem ASAR entpackt,
   damit Python sie direkt laden kann.
 
@@ -186,14 +200,15 @@ mac:
 
 ```powershell
 npm run build:dist
-# Ausgabe: dist/Clip2Guide-{version}-x64-win.exe
+# Ausgabe: dist/release/Clip2Guide-Setup-win-x64.exe
+#          dist/release/Clip2Guide-Portable-win-x64.exe
 ```
 
 ### macOS (arm64 / Apple Silicon)
 
 ```bash
 npm run build:dist
-# Ausgabe: dist/Clip2Guide-{version}-arm64.pkg
+# Ausgabe: dist/release/Clip2Guide-mac-arm64.pkg
 ```
 
 ---
