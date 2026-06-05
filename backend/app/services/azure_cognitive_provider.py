@@ -70,6 +70,7 @@ class AzureCognitiveProvider(AiProviderBase):
         response = self._client.chat.completions.create(
             model=self._deployment,
             messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=2048,
+            response_format={"type": "json_object"},
+            max_completion_tokens=8192,
         )
         return response.choices[0].message.content or "{}"

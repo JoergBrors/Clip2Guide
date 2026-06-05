@@ -83,8 +83,15 @@ class ManualRenderService:
         data = self._parse_json(raw)
         optimized = deepcopy(storyboard)
         scenes_raw = data.get("scenes")
+        # Einige Modelle verpacken die Liste in einen zusaetzlichen Wrapper-Key
         if not isinstance(scenes_raw, list):
-            raise ValueError("Handbuch-KI-Antwort enthaelt keine scenes-Liste.")
+            for val in data.values():
+                if isinstance(val, list):
+                    scenes_raw = val
+                    break
+        if not isinstance(scenes_raw, list):
+            preview = raw[:300].replace("\n", " ")
+            raise ValueError(f"Handbuch-KI-Antwort enthaelt keine scenes-Liste. Antwort-Anfang: {preview}")
         if len(scenes_raw) != len(storyboard.scenes):
             raise ValueError("Handbuch-KI-Antwort veraendert die Szenenanzahl.")
 
@@ -280,17 +287,74 @@ class ManualRenderService:
         styles["Normal"].font.name = "Calibri"
         styles["Normal"].font.size = Pt(10)
 
+        # --- Deckblatt ---
         title = doc.add_heading("Clip2Guide-Handbuch", level=0)
-        title.runs[0].font.size = Pt(22)
-        meta = doc.add_paragraph()
-        meta.add_run("Sprache: ").bold = True
-        meta.add_run(lang)
-        meta.add_run("\nErstellt am: ").bold = True
-        meta.add_run(date.today().isoformat())
-        meta.add_run("\nAnzahl Szenen: ").bold = True
-        meta.add_run(str(len(storyboard.scenes)))
-        meta.add_run("\nClip2Guide-Version: ").bold = True
-        meta.add_run("0.1.0")
+        title.runs[0].font.size = Pt(28)
+        title.paragraph_format.space_after = Pt(6)
+
+        # Quellvideo-Name als Untertitel
+        source_name = Path(storyboard.source_video).stem if storyboard.source_video else ""
+        if source_name:
+            sub = doc.add_paragraph(source_name)
+            sub.runs[0].font.size = Pt(14)
+            sub.runs[0].font.color.rgb = None  # Systemfarbe
+            sub.paragraph_format.space_after = Pt(20)
+
+        # Metadaten-Tabelle
+        meta_table = doc.add_table(rows=4, cols=2)
+        meta_table.style = "Table Grid"
+        meta_table.autofit = False
+        _META_ROWS = [
+            ("Sprache", lang),
+            ("Erstellt am", date.today().isoformat()),
+            ("Anzahl Szenen", str(len(storyboard.scenes))),
+            ("Clip2Guide-Version", "0.1.0"),
+        ]
+        for row, (label, value) in zip(meta_table.rows, _META_ROWS):
+            lbl_cell = row.cells[0]
+            val_cell = row.cells[1]
+            set_cell_width(lbl_cell, 4.0)
+            set_cell_width(val_cell, 14.8)
+            shade_cell(lbl_cell, "E8EDF2")
+            lbl_run = lbl_cell.paragraphs[0].add_run(label)
+            lbl_run.bold = True
+            lbl_run.font.size = Pt(10)
+            val_run = val_cell.paragraphs[0].add_run(value)
+            val_run.font.size = Pt(10)
+
+        doc.add_paragraph()
+
+        # Inhaltsverzeichnis / Szenen-Zusammenfassung
+        toc_heading = doc.add_heading("Inhalt", level=2)
+        toc_heading.runs[0].font.size = Pt(13)
+
+        toc_table = doc.add_table(rows=1 + len(storyboard.scenes), cols=3)
+        toc_table.style = "Table Grid"
+        toc_table.autofit = False
+        # Kopfzeile
+        hdr = toc_table.rows[0]
+        for cell, text, w in zip(hdr.cells, ["#", "Szene", "Bilder"], [1.2, 15.6, 2.0]):
+            set_cell_width(cell, w)
+            shade_cell(cell, "2E4057")
+            r = cell.paragraphs[0].add_run(text)
+            r.bold = True
+            r.font.size = Pt(10)
+            r.font.color.rgb = None
+        # Szenen-Zeilen
+        for s_idx, scene in enumerate(storyboard.scenes, 1):
+            row = toc_table.rows[s_idx]
+            text = scene.texts.get(lang, TextPanel())
+            scene_title = text.heading or scene.scene_id
+            img_count = str(len(scene.image_group) if scene.image_group else 1)
+            shade = "F7F9FB" if s_idx % 2 == 0 else "FFFFFF"
+            for cell, val, w in zip(row.cells, [str(s_idx), scene_title, img_count], [1.2, 15.6, 2.0]):
+                set_cell_width(cell, w)
+                shade_cell(cell, shade)
+                r = cell.paragraphs[0].add_run(val)
+                r.font.size = Pt(10)
+
+        # Seitenumbruch nach Deckblatt
+        doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
 
         frames_dir = settings.frames_dir / storyboard.video_id
         for scene_idx, scene in enumerate(storyboard.scenes, 1):
@@ -334,9 +398,9 @@ class ManualRenderService:
                     except Exception:
                         orig_w, orig_h = 1, 1
 
-                    # Bild so skalieren dass es maximal PAGE_W_CM breit und max 9cm hoch ist
+                    # Bild so skalieren dass es maximal PAGE_W_CM breit und max 5cm hoch ist
                     max_w_cm = PAGE_W_CM - 0.4
-                    max_h_cm = 9.0
+                    max_h_cm = 5.0
                     if orig_w / max(orig_h, 1) >= max_w_cm / max_h_cm:
                         img_w = Cm(max_w_cm)
                         img_h = None

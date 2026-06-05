@@ -74,6 +74,6 @@ class AzureOpenAiProvider(AiProviderBase):
             model=self._deployment,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            max_tokens=2048,
+            max_tokens=8192,
         )
         return response.choices[0].message.content or "{}"
