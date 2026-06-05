@@ -1,17 +1,29 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { api, StoryboardJson, Scene, TextPanel, subscribeToJob, JobEvent, ThrottleAlternative } from "../api/backendClient";
+import {
+  api,
+  StoryboardJson,
+  Scene,
+  TextPanel,
+  subscribeToJob,
+  JobEvent,
+  ThrottleAlternative,
+  StoryboardDraftHints,
+} from "../api/backendClient";
 import JsonPreview from "./JsonPreview";
 
 interface Props {
   videoId: string;
   selectedFrames?: string[];
   sceneGroups?: string[][] | null;
+  draftHints?: StoryboardDraftHints | null;
   onDone: () => void;
 }
 
 const DEFAULT_LANGUAGES = ["de", "en"];
+const DEFAULT_MASTER_PROMPT =
+  "Erstelle ein zusammenhaengendes Tutorial-Storyboard. Bewahre den roten Faden ueber alle Szenen, erklaere die Schritte fuer Einsteiger klar und nutze die Szenen- und Bildhinweise als verbindliche Zusatzanweisungen.";
 
-export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDone }: Props): React.ReactElement {
+export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draftHints, onDone }: Props): React.ReactElement {
   const [storyboard, setStoryboard] = useState<StoryboardJson | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeMsg, setAnalyzeMsg] = useState("");
@@ -19,6 +31,7 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
   const [error, setError] = useState<string | null>(null);
   const [languages, setLanguages] = useState<string[]>(DEFAULT_LANGUAGES);
   const [langInput, setLangInput] = useState<string>(DEFAULT_LANGUAGES.join(","));
+  const [masterPrompt, setMasterPrompt] = useState<string>(draftHints?.masterPrompt ?? DEFAULT_MASTER_PROMPT);
   const [activeScene, setActiveScene] = useState<number>(0);
   const [activeLang, setActiveLang] = useState<string>(DEFAULT_LANGUAGES[0]);
   const [showJson, setShowJson] = useState(false);
@@ -88,13 +101,112 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
     return server.some((f, i) => f !== currentGroup[i]);
   }
 
+  function estimateSceneDurationSeconds(scene: Scene): number {
+    const textDuration = Object.values(scene.texts ?? {}).reduce((maxDuration, panel) => {
+      const chars = Math.max(panel.speaker_notes.length, panel.body.length);
+      return Math.max(maxDuration, chars / 13);
+    }, 0);
+    const imageDuration = Math.max(2, scene.image_group.length * 2);
+    return Math.max(2, textDuration, imageDuration);
+  }
+
+  function withRecalculatedDuration(scene: Scene): Scene {
+    return { ...scene, duration_seconds: Number(estimateSceneDurationSeconds(scene).toFixed(1)) };
+  }
+
+  function getImagePrompt(sb: StoryboardJson, filename: string): string {
+    const direct = sb.scenes.find((scene) => scene.image_prompts?.[filename])?.image_prompts?.[filename];
+    if (direct) return direct;
+    const memory = sb.metadata?.image_prompt_memory as Record<string, string> | undefined;
+    return memory?.[filename] ?? "";
+  }
+
+  function rememberImagePrompt(sb: StoryboardJson, filename: string, prompt: string): StoryboardJson {
+    const memory = { ...((sb.metadata?.image_prompt_memory as Record<string, string> | undefined) ?? {}) };
+    if (prompt.trim()) memory[filename] = prompt;
+    return { ...sb, metadata: { ...sb.metadata, image_prompt_memory: memory } };
+  }
+
+  function describeSceneForContext(scene: Scene): string {
+    const textDescriptions = Object.entries(scene.texts ?? {})
+      .map(([lang, panel]) => {
+        const parts = [
+          panel.heading ? `Ueberschrift: ${panel.heading}` : "",
+          panel.body ? `Beschreibung: ${panel.body}` : "",
+          panel.speaker_notes ? `Sprecher-Notizen: ${panel.speaker_notes}` : "",
+        ].filter(Boolean);
+        return parts.length ? `${lang}: ${parts.join(" | ")}` : "";
+      })
+      .filter(Boolean);
+    return textDescriptions.join("\n");
+  }
+
+  function buildUpdatedMasterContext(sb: StoryboardJson): Record<string, unknown> | null {
+    const master = sb.metadata?.ai_master_context;
+    if (!master || typeof master !== "object" || Array.isArray(master)) return null;
+    const masterContext = { ...(master as Record<string, unknown>) };
+    const originalSceneGroups = Array.isArray(masterContext.scene_groups)
+      ? masterContext.scene_groups
+      : [];
+    masterContext.scene_groups = sb.scenes.map((scene, idx) => {
+      const original = originalSceneGroups[idx];
+      const originalGroup = original && typeof original === "object" && !Array.isArray(original)
+        ? original as Record<string, unknown>
+        : {};
+      const currentDescription = describeSceneForContext(scene);
+      return {
+        ...originalGroup,
+        scene_index: idx,
+        scene_id: scene.scene_id,
+        description: currentDescription || String(originalGroup.description ?? ""),
+        frames: scene.image_group,
+        image_prompts: scene.image_prompts,
+        duration_seconds: scene.duration_seconds,
+      };
+    });
+    masterContext.current_scene_count = sb.scenes.length;
+    masterContext.last_client_update = "Master-Kontext wurde vor dem Szenen-Rewrite aus dem aktuellen Storyboard aktualisiert.";
+    return masterContext;
+  }
+
+  function buildRewriteContext(sb: StoryboardJson): Record<string, unknown> {
+    const masterContext = buildUpdatedMasterContext(sb);
+    return {
+      master_context: masterContext ?? sb.metadata?.ai_master_context ?? null,
+      change_history: sb.metadata?.ai_change_history ?? [],
+      scenes: sb.scenes.map((scene, idx) => ({
+        index: idx + 1,
+        scene_id: scene.scene_id,
+        scene_description: describeSceneForContext(scene),
+        image_group: scene.image_group,
+        image_prompts: scene.image_prompts,
+        duration_seconds: scene.duration_seconds,
+        texts: scene.texts,
+      })),
+    };
+  }
+
+  function appendLocalChangeHistory(sb: StoryboardJson, summary: string): StoryboardJson {
+    const history = Array.isArray(sb.metadata?.ai_change_history)
+      ? [...(sb.metadata.ai_change_history as Array<Record<string, unknown>>)]
+      : [];
+    history.push({ index: history.length + 1, summary });
+    return {
+      ...sb,
+      metadata: {
+        ...sb.metadata,
+        ai_change_history: history.slice(-50),
+      },
+    };
+  }
+
   /**
    * Plant einen Auto-Rewrite fuer eine oder mehrere Szenen (debounced 500 ms).
    * Wird nach jeder Bild-Mutation aufgerufen.
    * sbSnapshot: das bereits aktualisierte Storyboard (nicht den veralteten React-State verwenden)
    * sceneIndices: Indizes der betroffenen Szenen
    */
-  function scheduleAutoRewrite(sbSnapshot: StoryboardJson, sceneIndices: number[]) {
+  function scheduleAutoRewrite(sbSnapshot: StoryboardJson, sceneIndices: number[], changeSummary: string) {
     sceneIndices.forEach((idx) => {
       const sceneId = sbSnapshot.scenes[idx]?.scene_id;
       if (!sceneId) return;
@@ -104,7 +216,7 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
       }
       autoRewriteTimersRef.current[sceneId] = setTimeout(() => {
         delete autoRewriteTimersRef.current[sceneId];
-        runRewriteScene(undefined, undefined, sbSnapshot, idx);
+        runRewriteScene(undefined, undefined, sbSnapshot, idx, changeSummary);
       }, 500);
     });
   }
@@ -122,6 +234,10 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMasterPrompt(draftHints?.masterPrompt ?? DEFAULT_MASTER_PROMPT);
+  }, [videoId, draftHints?.masterPrompt]);
 
   // Provider-Liste einmalig beim Laden holen
   useEffect(() => {
@@ -153,6 +269,53 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
       .finally(() => setModelsLoading(false));
   }, [provider]);
 
+  const storyboardDraftScenes = useMemo<string[][]>(() => {
+    if (sceneGroups && sceneGroups.length > 0) return sceneGroups;
+    return refFrames.length > 0 ? [refFrames] : [];
+  }, [sceneGroups, refFrames]);
+
+  const analyzePromptPreview = useMemo(() => {
+    const lines: string[] = [
+      "Analyse-Auftrag vor KI-Start",
+      `Provider: ${provider || "(nicht geladen)"}`,
+      `Modell: ${selectedModel || "(Provider-Default)"}`,
+      `Video-ID: ${videoId}`,
+      `Sprachen: ${languages.join(", ")}`,
+      `Ausgewaehlte Frames: ${(selectedFrames && selectedFrames.length > 0) ? selectedFrames.join(", ") : "(alle verfuegbaren Frames)"}`,
+      "",
+      "Allgemein vorangestellter Master-Prompt:",
+      masterPrompt.trim() || "(leer)",
+      "",
+      "Hinweis: Das Backend ergaenzt diesen Kontext pro KI-Aufruf mit build_analysis_prompt().",
+      "Nach dem Start erscheinen darunter die echten Backend-Prompt-Dumps.",
+      "",
+      `Storyboard-Szenen: ${storyboardDraftScenes.length}`,
+    ];
+
+    storyboardDraftScenes.forEach((group, sceneIdx) => {
+      const description = draftHints?.sceneDescriptions?.[sceneIdx]?.trim();
+      lines.push("");
+      lines.push(`Szene ${sceneIdx + 1}`);
+      lines.push(`Frames (${group.length}): ${group.join(", ")}`);
+      if (description) {
+        lines.push("Kurze Szenenbeschreibung:");
+        lines.push(description);
+      }
+      const imagePromptLines = group
+        .map((filename) => {
+          const prompt = draftHints?.imagePrompts?.[filename]?.trim();
+          return prompt ? `- ${filename}: ${prompt}` : "";
+        })
+        .filter(Boolean);
+      if (imagePromptLines.length > 0) {
+        lines.push("Bildspezifische KI-Anweisungen:");
+        lines.push(...imagePromptLines);
+      }
+    });
+
+    return lines.join("\n");
+  }, [draftHints, languages, masterPrompt, provider, refFrames, sceneGroups, selectedFrames, selectedModel, storyboardDraftScenes, videoId]);
+
   useEffect(() => {
     api.getStoryboard(videoId)
       .then((sb) => { setStoryboard(sb); syncServerImageGroups(sb); })
@@ -163,13 +326,20 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
     setAnalyzing(true);
     setError(null);
     setThrottleDialog(null);
+    addDebugLog("analyze-preview", analyzePromptPreview);
     const activeProvider = providerOverride ?? provider;
     const activeModel = (modelOverride ?? selectedModel) || undefined;
+    const analyzeDraftHints: StoryboardDraftHints = {
+      masterPrompt: masterPrompt.trim(),
+      sceneDescriptions: draftHints?.sceneDescriptions ?? [],
+      imagePrompts: draftHints?.imagePrompts ?? {},
+    };
     try {
       const { job_id } = await api.analyzeVideo(
         videoId, languages, activeProvider, activeModel,
         selectedFrames?.length ? selectedFrames : undefined,
         sceneGroups?.length ? sceneGroups : undefined,
+        analyzeDraftHints,
       );
       subscribeToJob(job_id, (ev: JobEvent) => {
         if (ev.type === "debug") { addDebugLog(ev.step, ev.message); return; }
@@ -204,7 +374,8 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
 
   function setImagePrompt(sceneIdx: number, filename: string, prompt: string) {
     if (!storyboard) return;
-    const updated = { ...storyboard, scenes: [...storyboard.scenes] };
+    let updated = rememberImagePrompt(storyboard, filename, prompt);
+    updated = { ...updated, scenes: [...updated.scenes] };
     const s = { ...updated.scenes[sceneIdx] };
     s.image_prompts = { ...s.image_prompts, [filename]: prompt };
     updated.scenes[sceneIdx] = s;
@@ -217,7 +388,7 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
     const scene = { ...updated.scenes[sceneIdx] };
     scene.texts = { ...scene.texts, [lang]: { ...scene.texts[lang], [field]: value } };
     updated.scenes = [...updated.scenes];
-    updated.scenes[sceneIdx] = scene;
+    updated.scenes[sceneIdx] = withRecalculatedDuration(scene);
     setStoryboard(updated);
   }
 
@@ -228,37 +399,42 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
     s.image_group = s.image_group.filter((f) => f !== filename);
     if (s.start_frame === filename) s.start_frame = s.image_group[0] ?? "";
     if (s.end_frame === filename) s.end_frame = s.image_group[s.image_group.length - 1] ?? null;
-    updated.scenes[sceneIdx] = s;
+    updated.scenes[sceneIdx] = withRecalculatedDuration(s);
     setStoryboard(updated);
-    if (s.image_group.length > 0) scheduleAutoRewrite(updated, [sceneIdx]);
+    if (s.image_group.length > 0) {
+      scheduleAutoRewrite(updated, [sceneIdx], `Bild '${filename}' wurde aus Szene ${sceneIdx + 1} entfernt.`);
+    }
   }
 
   function moveFrameToScene(fromIdx: number, toIdx: number, filename: string) {
     if (!storyboard) return;
     const updated = { ...storyboard, scenes: [...storyboard.scenes] };
+    const imagePrompt = getImagePrompt(storyboard, filename);
     const from = { ...updated.scenes[fromIdx] };
     from.image_group = from.image_group.filter((f) => f !== filename);
-    updated.scenes[fromIdx] = from;
+    updated.scenes[fromIdx] = withRecalculatedDuration(from);
     const to = { ...updated.scenes[toIdx] };
     to.image_group = [...to.image_group, filename];
-    updated.scenes[toIdx] = to;
+    if (imagePrompt) to.image_prompts = { ...to.image_prompts, [filename]: imagePrompt };
+    updated.scenes[toIdx] = withRecalculatedDuration(to);
     setStoryboard(updated);
     // Beide betroffenen Szenen neu schreiben (Quell-Szene verliert ein Bild, Ziel-Szene bekommt eines)
     const affected = [toIdx];
     if (from.image_group.length > 0) affected.push(fromIdx);
-    scheduleAutoRewrite(updated, affected);
+    scheduleAutoRewrite(updated, affected, `Bild '${filename}' wurde von Szene ${fromIdx + 1} nach Szene ${toIdx + 1} verschoben.`);
   }
 
   function addFrameFromRef(filename: string, toIdx: number) {
     if (!storyboard) return;
+    const imagePrompt = getImagePrompt(storyboard, filename);
     const updated = { ...storyboard, scenes: storyboard.scenes.map((s, i) => {
       if (i === toIdx) return s;
       if (s.image_group.includes(filename)) {
         const ng = s.image_group.filter((f) => f !== filename);
-        return { ...s, image_group: ng,
+        return withRecalculatedDuration({ ...s, image_group: ng,
           start_frame: ng[0] ?? s.start_frame,
           end_frame: ng[ng.length - 1] ?? null,
-        };
+        });
       }
       return s;
     }) };
@@ -266,15 +442,16 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
     if (!to.image_group.includes(filename)) {
       to.image_group = [...to.image_group, filename];
       if (!to.start_frame) to.start_frame = to.image_group[0];
+      if (imagePrompt) to.image_prompts = { ...to.image_prompts, [filename]: imagePrompt };
     }
-    updated.scenes[toIdx] = to;
+    updated.scenes[toIdx] = withRecalculatedDuration(to);
     setStoryboard(updated);
     // Ziel-Szene neu schreiben; ggf. auch alle Quell-Szenen die ein Bild verloren haben
     const affectedSrcIndices = storyboard.scenes
       .map((s, i) => (i !== toIdx && s.image_group.includes(filename) ? i : -1))
       .filter((i) => i >= 0);
     const affected = [toIdx, ...affectedSrcIndices];
-    scheduleAutoRewrite(updated, affected);
+    scheduleAutoRewrite(updated, affected, `Bild '${filename}' wurde zu Szene ${toIdx + 1} hinzugefuegt.`);
   }
 
   function reorderWithinScene(sceneIdx: number, fromFilename: string, beforeFilename: string | null) {
@@ -287,9 +464,9 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
     s.image_group = group;
     s.start_frame = group[0] ?? "";
     s.end_frame = group[group.length - 1] ?? null;
-    updated.scenes[sceneIdx] = s;
+    updated.scenes[sceneIdx] = withRecalculatedDuration(s);
     setStoryboard(updated);
-    scheduleAutoRewrite(updated, [sceneIdx]);
+    scheduleAutoRewrite(updated, [sceneIdx], `Bildreihenfolge in Szene ${sceneIdx + 1} wurde geaendert.`);
   }
 
   function addScene() {
@@ -305,14 +482,21 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
       texts: emptyTexts,
       duration_seconds: 0,
     };
-    const updated = { ...storyboard, scenes: [...storyboard.scenes, newScene] };
+    const updated = appendLocalChangeHistory(
+      { ...storyboard, scenes: [...storyboard.scenes, newScene] },
+      `Neue leere Szene ${storyboard.scenes.length + 1} wurde erstellt.`,
+    );
     setStoryboard(updated);
     setActiveScene(updated.scenes.length - 1);
   }
 
   function deleteScene(idx: number) {
     if (!storyboard || storyboard.scenes.length <= 1) return;
-    const updated = { ...storyboard, scenes: storyboard.scenes.filter((_, i) => i !== idx) };
+    const deleted = storyboard.scenes[idx];
+    const updated = appendLocalChangeHistory(
+      { ...storyboard, scenes: storyboard.scenes.filter((_, i) => i !== idx) },
+      `Szene ${idx + 1} (${deleted?.scene_id ?? "unbekannt"}) wurde geloescht.`,
+    );
     setStoryboard(updated);
     setActiveScene(Math.min(idx, updated.scenes.length - 1));
   }
@@ -395,6 +579,7 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
     modelOverride?: string,
     sbOverride?: StoryboardJson,   // direkt nach Bild-Mutation übergeben (kein Stale-State)
     sceneIdxOverride?: number,     // Szenen-Index des sbOverride
+    changeSummary = "Manueller Rewrite der Szene.",
   ) {
     const sb = sbOverride ?? storyboard;
     const sceneIdx = sceneIdxOverride ?? activeScene;
@@ -415,10 +600,12 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
         : undefined;
       const { job_id } = await api.rewriteScene(
         videoId, scn.scene_id, scn.image_group, langs,
-        undefined,  // current_texts: niemals senden – würde KI auf bestehenden Text fixieren
+        scn.texts,
         Object.keys(imagePrompts ?? {}).length ? imagePrompts : undefined,
         activeProvider, activeModel,
         scn.duration_seconds ?? undefined,
+        buildRewriteContext(sb),
+        changeSummary,
       );
       const sceneIdForEnrich = scn.scene_id;
       const capturedSceneIdx = sceneIdx;
@@ -433,9 +620,23 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
           setStoryboard((prev) => {
             if (!prev) return prev;
             const scenes = [...prev.scenes];
-            const s = { ...scenes[capturedSceneIdx], texts: { ...scenes[capturedSceneIdx].texts, ...texts } };
+            const durationSeconds = typeof ev.data?.duration_seconds === "number"
+              ? ev.data.duration_seconds
+              : scenes[capturedSceneIdx].duration_seconds;
+            const s = withRecalculatedDuration({
+              ...scenes[capturedSceneIdx],
+              texts: { ...scenes[capturedSceneIdx].texts, ...texts },
+              duration_seconds: durationSeconds,
+            });
             scenes[capturedSceneIdx] = s;
-            const updated = { ...prev, scenes };
+            const updated = {
+              ...prev,
+              scenes,
+              metadata: {
+                ...prev.metadata,
+                ...((ev.data?.metadata as Record<string, unknown> | undefined) ?? {}),
+              },
+            };
             // Szene als neu geschrieben markieren → kein doppelter Auto-Enrich beim manuellen Speichern
             setRewrittenSceneIds((rw) => new Set([...rw, sceneIdForEnrich]));
             // Storyboard sofort speichern, dann Enrich für slide_panels/render_hints
@@ -629,6 +830,33 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
         {!storyboard && !analyzing && (
           <>
             <p style={{ color: "#aaa" }}>Noch kein Storyboard. KI-Analyse starten:</p>
+
+            <div style={{ marginBottom: 14 }}>
+              <label htmlFor="master-prompt-input" style={{ fontSize: 13, color: "#90caf9", display: "block", marginBottom: 6 }}>
+                Allgemeiner Master-Prompt
+              </label>
+              <textarea
+                id="master-prompt-input"
+                rows={4}
+                value={masterPrompt}
+                onChange={(e) => setMasterPrompt(e.target.value)}
+                placeholder="Gesamtanweisung fuer das Storyboard..."
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  resize: "vertical",
+                  minHeight: 84,
+                  background: "#0d1520",
+                  color: "#d7ecff",
+                  border: "1px solid #203b56",
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  fontFamily: "inherit",
+                  fontSize: 13,
+                  lineHeight: 1.45,
+                }}
+              />
+            </div>
 
             {/* Provider-Auswahl */}
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
@@ -1063,7 +1291,7 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
         <div className="card" style={{ marginTop: 12, background: "#080d14", border: "1px solid #1565c0" }}>
           <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 12 }}>
             <span style={{ color: "#4fc3f7", fontWeight: 700, fontSize: 13 }}>
-              \ud83d\udd0d KI-Debug-Protokoll ({debugLogs.length} Eintr\u00e4ge)
+              \ud83d\udd0d KI-Prompt-Debug ({debugLogs.length} Backend-Eintr\u00e4ge)
             </span>
             <button
               className="btn btn-ghost"
@@ -1072,6 +1300,18 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
             >
               Leeren
             </button>
+          </div>
+          <div style={{ background: "#0d1520", borderRadius: 6, padding: "8px 12px", border: "1px solid #1a3050", marginBottom: 8 }}>
+            <div style={{ fontSize: 11, background: "#0d2a4a", color: "#4fc3f7", borderRadius: 3, padding: "0 6px", display: "inline-block", marginBottom: 5 }}>
+              analyse-preview
+            </div>
+            <pre style={{
+              margin: 0, fontSize: 11, color: "#90b4c8",
+              fontFamily: "'Consolas', 'Courier New', monospace",
+              whiteSpace: "pre-wrap", wordBreak: "break-word",
+              maxHeight: 320, overflowY: "auto",
+              background: "#050a10", borderRadius: 4, padding: "6px 8px",
+            }}>{analyzePromptPreview}</pre>
           </div>
           {debugLogs.length === 0 && (
             <p style={{ color: "#556", fontSize: 12, margin: 0 }}>
@@ -1098,60 +1338,90 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, onDo
         </div>
       )}
 
-      {/* Übergebene Frames – Referenzstreifen */}
-      {refFrames.length > 0 && (
+      {/* Storyboard-Zusammenfassung vor/nach Analyse */}
+      {storyboardDraftScenes.length > 0 && (
         <div className="card" style={{ marginTop: 12 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#6080a0", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
-            {selectedFrames && selectedFrames.length > 0
-              ? `Übergebene Frames (${refFrames.length}) – Auswahl · ziehen = in Szene einfügen`
-              : `Alle Frames (${refFrames.length}) – ziehen = in Szene einfügen`}
+            Storyboard-Zusammenfassung ({storyboardDraftScenes.length} Szene(n), {refFrames.length} Frame(s))
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, overflowX: "auto" }}>
-            {refFrames.map((filename, idx) => {
-              const src = api.frameImageUrl(videoId, filename);
-              // Welcher Szene ist dieser Frame zugeordnet?
-              const assignedScene = storyboard?.scenes.findIndex((s) => s.image_group.includes(filename)) ?? -1;
-              const isDragging = dragInfo?.filename === filename && dragInfo.fromScene === null;
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+            {storyboardDraftScenes.map((group, sceneIdx) => {
+              const description = draftHints?.sceneDescriptions?.[sceneIdx]?.trim();
+              const promptedFrames = group.filter((filename) => draftHints?.imagePrompts?.[filename]?.trim());
               return (
                 <div
-                  key={filename}
-                  draggable
-                  title={`${filename}${assignedScene >= 0 ? ` → Szene ${assignedScene + 1}` : " (nicht zugeordnet)"} – ziehen zum Hinzufügen`}
-                  style={{ position: "relative", flexShrink: 0, cursor: "grab", opacity: isDragging ? 0.4 : 1 }}
-                  onDragStart={(e) => { setDragInfo({ filename, fromScene: null }); e.dataTransfer.effectAllowed = "copy"; }}
-                  onDragEnd={() => setDragInfo(null)}
-                  onMouseEnter={(e) => handleImgHover(src, e)}
-                  onMouseMove={(e) => handleImgHover(src, e)}
-                  onMouseLeave={() => setHoveredImg(null)}
+                  key={`draft-scene-${sceneIdx}`}
+                  style={{
+                    background: "#0d1520",
+                    border: "1px solid #203b56",
+                    borderRadius: 6,
+                    padding: 10,
+                    minWidth: 0,
+                  }}
                 >
-                  <img
-                    src={src}
-                    alt={`Frame ${idx + 1}`}
-                    style={{
-                      width: 88,
-                      height: 50,
-                      objectFit: "cover",
-                      borderRadius: 4,
-                      border: `1px solid ${assignedScene >= 0 ? "#2a4a6a" : "#6a2a2a"}`,
-                      display: "block",
-                      opacity: assignedScene >= 0 ? 1 : 0.5,
-                      pointerEvents: "none",
-                    }}
-                  />
-                  {/* Szenen-Badge */}
-                  <div style={{
-                    position: "absolute",
-                    bottom: 2,
-                    right: 2,
-                    background: assignedScene >= 0 ? "rgba(10,30,60,0.85)" : "rgba(100,20,20,0.9)",
-                    color: assignedScene >= 0 ? "#90caf9" : "#ef9090",
-                    fontSize: 9,
-                    padding: "1px 4px",
-                    borderRadius: 3,
-                    fontWeight: 700,
-                    pointerEvents: "none",
-                  }}>
-                    {assignedScene >= 0 ? `S${assignedScene + 1}` : "?"}
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 7 }}>
+                    <strong style={{ color: "#90caf9", fontSize: 13 }}>Szene {sceneIdx + 1}</strong>
+                    <span style={{ color: "#6f8aa5", fontSize: 11 }}>{group.length} Frame(s)</span>
+                    {promptedFrames.length > 0 && (
+                      <span style={{ marginLeft: "auto", color: "#4fc3f7", fontSize: 11 }}>
+                        {promptedFrames.length} Bild-Hinweis(e)
+                      </span>
+                    )}
+                  </div>
+                  {description && (
+                    <p style={{ margin: "0 0 8px", color: "#c8e6ff", fontSize: 12, lineHeight: 1.4 }}>
+                      {description}
+                    </p>
+                  )}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {group.map((filename, frameIdx) => {
+                      const src = api.frameImageUrl(videoId, filename);
+                      const assignedScene = storyboard?.scenes.findIndex((s) => s.image_group.includes(filename)) ?? -1;
+                      const imagePrompt = draftHints?.imagePrompts?.[filename]?.trim();
+                      const isDragging = dragInfo?.filename === filename && dragInfo.fromScene === null;
+                      return (
+                        <div
+                          key={filename}
+                          draggable
+                          title={`${filename}${imagePrompt ? ` - KI: ${imagePrompt}` : ""}`}
+                          style={{ position: "relative", flexShrink: 0, cursor: "grab", opacity: isDragging ? 0.4 : 1 }}
+                          onDragStart={(e) => { setDragInfo({ filename, fromScene: null }); e.dataTransfer.effectAllowed = "copy"; }}
+                          onDragEnd={() => setDragInfo(null)}
+                          onMouseEnter={(e) => handleImgHover(src, e)}
+                          onMouseMove={(e) => handleImgHover(src, e)}
+                          onMouseLeave={() => setHoveredImg(null)}
+                        >
+                          <img
+                            src={src}
+                            alt={`Szene ${sceneIdx + 1}, Frame ${frameIdx + 1}`}
+                            style={{
+                              width: 72,
+                              height: 41,
+                              objectFit: "cover",
+                              borderRadius: 4,
+                              border: `1px solid ${imagePrompt ? "#4fc3f7" : assignedScene >= 0 ? "#2a4a6a" : "#6a2a2a"}`,
+                              display: "block",
+                              opacity: assignedScene >= 0 || !storyboard ? 1 : 0.5,
+                              pointerEvents: "none",
+                            }}
+                          />
+                          <div style={{
+                            position: "absolute",
+                            bottom: 2,
+                            right: 2,
+                            background: imagePrompt ? "rgba(21,101,192,0.9)" : "rgba(10,30,60,0.85)",
+                            color: imagePrompt ? "#e3f2fd" : "#90caf9",
+                            fontSize: 9,
+                            padding: "1px 4px",
+                            borderRadius: 3,
+                            fontWeight: 700,
+                            pointerEvents: "none",
+                          }}>
+                            {imagePrompt ? "KI" : frameIdx + 1}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );

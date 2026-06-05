@@ -94,6 +94,8 @@ Clip2Guide/
 │       │   ├── frame_extractor.py        # FFmpeg-basierte Frame-Extraktion
 │       │   ├── frame_stack_service.py    # FrameStack laden / speichern (JSON)
 │       │   ├── storyboard_service.py     # Prompt-Bau, JSON-Parsing, Persistenz
+│       │   ├── manual_render_service.py  # DOCX-Handbuch aus Storyboard, optionale KI-Textoptimierung
+│       │   ├── project_archive_service.py # ZIP Export/Import kompletter Projektstaende
 │       │   ├── video_normalizer.py       # FFmpeg H.264/AAC-Normalisierung (async)
 │       │   ├── pause_detector.py         # OpenCV-basierte Pause-Erkennung
 │       │   └── render_service.py         # Subprocess-Befehl für create_tutorial.py
@@ -184,8 +186,9 @@ Benutzer
   ▼
 [5] Rendering
     POST /api/videos/{id}/render
-    → Szenen-Dauern aus TTS-Textlänge neu berechnen (~13 Zeichen/s)
-    → Subprocess: python -u create_tutorial.py
+    → output_formats: video, manual oder beide
+    → Video: Szenen-Dauern aus TTS-Textlänge neu berechnen (~13 Zeichen/s)
+    → Video-Subprocess: python -u create_tutorial.py
        Pro Szene + Sprache:
          1. speaker_notes → gTTS → temp MP3
          2. PIL: Screenshot links (1320 px) + Textpanel rechts (600 px) → PNG
@@ -193,7 +196,14 @@ Benutzer
        4. concatenate_videoclips → Gesamtvideo
        5. FFmpeg-Encoding (H.264, CRF/Preset, 25 fps)
     → SSE: Fortschritt aus stdout per Regex-Parsing
-    → Ausgabe: workspace/output/{video_id}/tutorial_{lang}.mp4
+    → Video-Ausgabe: workspace/output/{video_id}/tutorial_{lang}.mp4
+    → Handbuch-Ausgabe: workspace/output/{video_id}/manual_{lang}.docx
+
+[6] Projektstand sichern / wiederherstellen
+    POST /api/videos/{id}/export-project
+    → ZIP mit storyboard.json, frame_stack.json, Frames, Uploads, Outputs und manifest.json
+    POST /api/projects/import
+    → Manifest pruefen, Hashes validieren, Zip-Slip verhindern, standardmaessig neue video_id erzeugen
 ```
 
 ## Workflow-Diagramm (Bild-Modus)
@@ -425,10 +435,10 @@ JobEvent
 
 # Request-Modelle
 ProcessingRequest      (video_id, edit_mode, margin, has_audio, audio_threshold, motion_threshold)
-AnalyzeRequest         (video_id, languages, ai_provider, ai_model, selected_frames, scene_groups)
-RewriteSceneRequest    (scene_id, image_group, languages, ai_provider, ai_model, current_texts, image_prompts, duration_seconds)
+AnalyzeRequest         (video_id, languages, ai_provider, ai_model, master_prompt, selected_frames, scene_groups, scene_descriptions, image_prompts)
+RewriteSceneRequest    (scene_id, image_group, languages, ai_provider, ai_model, current_texts, image_prompts, duration_seconds, storyboard_context, change_summary)
 EnrichRequest          (languages, scene_ids, ai_provider, ai_model)
-RenderRequest          (video_id, languages, fps, quality, tts_slow)
+RenderRequest          (video_id, languages, output_formats, handbook_optimize, ai_provider, ai_model, fps, quality, tts_slow)
 
 # Response-Modelle
 UploadResponse         (video_id, filename, path, has_audio, metadata)

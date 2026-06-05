@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, session, shell } from "electron";
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
@@ -147,9 +147,19 @@ function registerIpcHandlers(): void {
   require("./ipc").registerAll(ipcMain);
 }
 
+async function clearStartupCache(): Promise<void> {
+  try {
+    await session.defaultSession.clearCache();
+    console.log("[startup] Electron-Session-Cache bereinigt");
+  } catch (err) {
+    console.warn("[startup] Electron-Session-Cache konnte nicht bereinigt werden:", err);
+  }
+}
+
 // ── App-Lifecycle ──────────────────────────────────────────────────────────────
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await clearStartupCache();
   registerIpcHandlers();
 
   const setupComplete = fs.existsSync(USER_ENV_FILE);

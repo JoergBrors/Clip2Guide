@@ -265,6 +265,24 @@ def build_scene_clip(
     slide_panels = (scene.slide_panels or {}).get(lang, [])
     use_slide_panels = bool(slide_panels) and len(slide_panels) >= len(image_group)
 
+    # TTS neu berechnen wenn nur slide_panels Speaker-Texte enthalten.
+    # Muss vor der Bilddauer-Berechnung passieren, damit Bild-/Panel-Clips
+    # die komplette spaetere Audio-/Szenendauer abdecken.
+    if use_slide_panels and audio_clip is None:
+        full_speaker = " ".join(
+            (sp.get("speaker_notes", "") if isinstance(sp, dict) else sp.speaker_notes)
+            for sp in slide_panels
+        ).strip()
+        if full_speaker:
+            try:
+                tts_path2 = tmp_dir / f"tts_{scene_idx}_{lang}_slides.mp3"
+                create_tts_audio(full_speaker, lang, tts_path2, slow=tts_slow)
+                raw2 = AudioFileClip(str(tts_path2))
+                audio_clip = raw2
+                actual_duration = max(actual_duration, raw2.duration)
+            except Exception as exc:
+                print(f"  [WARN] TTS (slide_panels) fehlgeschlagen: {exc}", file=sys.stderr)
+
     # Bildzeiten bestimmen
     def _img_dur(idx: int, fallback: float) -> float:
         if idx < len(img_durations_hint):
@@ -274,14 +292,24 @@ def build_scene_clip(
                 pass
         return fallback
 
-    if use_slide_panels:
-        # Jedes Bild hat eigene Dauer aus render_hints; Gesamt-duration aktualisieren
-        explicit_total = sum(
-            _img_dur(i, actual_duration / max(len(image_group), 1))
-            for i in range(len(image_group))
-        )
-        actual_duration = max(actual_duration, explicit_total)
+    def _normalized_image_durations(count: int, target_duration: float) -> list[float]:
+        """Liefert Bilddauern, die zusammen mindestens die Szenendauer abdecken."""
+        if count <= 0:
+            return []
+        fallback = target_duration / count
+        durations = [_img_dur(i, fallback) for i in range(count)]
+        total = sum(durations)
+        if total <= 0:
+            return [fallback for _ in range(count)]
+        if total < target_duration:
+            scale = target_duration / total
+            durations = [max(d * scale, 0.1) for d in durations]
+            # Rundungsfehler auf dem letzten Bild ausgleichen, damit kein Composite zu kurz ist.
+            diff = target_duration - sum(durations)
+            durations[-1] += diff
+        return durations
 
+    image_durations = _normalized_image_durations(len(image_group), actual_duration)
     frame_dur_default = actual_duration / max(len(image_group), 1)
     frame_clips = []
     panel_clips = []
@@ -290,7 +318,7 @@ def build_scene_clip(
         fp = frames_dir / fname
         if not fp.exists():
             continue
-        fdur = _img_dur(img_idx, frame_dur_default)
+        fdur = image_durations[img_idx] if img_idx < len(image_durations) else frame_dur_default
 
         img_clip = ImageClip(str(fp)).with_duration(fdur).resized((IMAGE_W, H))
         if transition == "fade" and img_idx > 0:
@@ -314,22 +342,6 @@ def build_scene_clip(
         tmp_ph = tmp_dir / f"placeholder_{scene_idx}.jpg"
         placeholder.save(str(tmp_ph))
         frame_clips = [ImageClip(str(tmp_ph)).with_duration(actual_duration)]
-
-    # TTS neu berechnen wenn slide_panels Speaker-Texte enthalten
-    if use_slide_panels and audio_clip is None:
-        full_speaker = " ".join(
-            (sp.get("speaker_notes", "") if isinstance(sp, dict) else sp.speaker_notes)
-            for sp in slide_panels
-        ).strip()
-        if full_speaker:
-            try:
-                tts_path2 = tmp_dir / f"tts_{scene_idx}_{lang}_slides.mp3"
-                create_tts_audio(full_speaker, lang, tts_path2, slow=tts_slow)
-                raw2 = AudioFileClip(str(tts_path2))
-                audio_clip = raw2
-                actual_duration = max(actual_duration, raw2.duration)
-            except Exception as exc:
-                print(f"  [WARN] TTS (slide_panels) fehlgeschlagen: {exc}", file=sys.stderr)
 
     if use_slide_panels:
         # Jedes Bild mit eigenem Panel als separates CompositeVideoClip zusammenbauen

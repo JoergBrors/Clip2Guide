@@ -1,12 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
-import { api, FrameStack as FrameStackData, FrameInfo, subscribeToJob, JobEvent } from "../api/backendClient";
+import {
+  api,
+  FrameStack as FrameStackData,
+  FrameInfo,
+  subscribeToJob,
+  JobEvent,
+  StoryboardDraftHints,
+} from "../api/backendClient";
 import FrameCarousel from "./FrameCarousel";
 import CustomFrameCarousel from "./CustomFrameCarousel";
 import FrameEditor from "./FrameEditor";
 
 interface Props {
   videoId: string;
-  onDone: (selectedFrames: string[], sceneGroups: string[][]) => void;
+  onDone: (selectedFrames: string[], sceneGroups: string[][], draftHints: StoryboardDraftHints) => void;
   disableExtract?: boolean;
 }
 
@@ -39,10 +46,15 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
   const [sceneDragOver, setSceneDragOver] = useState<{ sceneIdx: number; frameIdx: number } | null>(null);
   // Cross-Szenen-Drag (welche Szenen-Karte ist Ziel)
   const [sceneCrossDragOver, setSceneCrossDragOver] = useState<number | null>(null);
+  // Drag-Zustand fuer Szenen-Karten im Entwurf
+  const [draftSceneDragKey, setDraftSceneDragKey] = useState<number | null>(null);
+  const [sceneDescriptions, setSceneDescriptions] = useState<Record<number, string>>({});
+  const [imagePrompts, setImagePrompts] = useState<Record<string, string>>({});
 
   // Upload eigener Bilder
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const skipNextFrameStackSyncRef = useRef(false);
 
   async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
@@ -67,6 +79,10 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
   // Lokale Szenen-Reihenfolge initialisieren / aktualisieren
   useEffect(() => {
     if (!frameStack) return;
+    if (skipNextFrameStackSyncRef.current) {
+      skipNextFrameStackSyncRef.current = false;
+      return;
+    }
     const map = new Map<number, FrameInfo[]>();
     for (const f of frameStack.frames) {
       const s = f.scene_index ?? 0;
@@ -158,6 +174,13 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
 
   // ── Szenen-Gruppen-Operationen ─────────────────────────────────────────────
 
+  function applySceneEntries(entries: Array<[number, FrameInfo[]]>, descriptions = sceneDescriptions) {
+    setLocalSceneFrames(new Map(entries.map(([, frames], i) => [i, frames] as [number, FrameInfo[]])));
+    setSceneDescriptions(Object.fromEntries(
+      entries.map(([oldKey], i) => [i, oldKey >= 0 ? descriptions[oldKey] ?? "" : ""])
+    ));
+  }
+
   function moveFrameBetweenScenes(fromKey: number, toKey: number, filename: string) {
     const fromFrames = localSceneFrames.get(fromKey) ?? [];
     const toFrames = localSceneFrames.get(toKey) ?? [];
@@ -172,23 +195,96 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
         if (key === toKey) return [key, newTo] as [number, FrameInfo[]];
         return [key, frames] as [number, FrameInfo[]];
       })
-      .filter(([, frames]) => frames.length > 0);
-    setLocalSceneFrames(new Map(allEntries.map(([, frames], i) => [i, frames] as [number, FrameInfo[]])));
+    applySceneEntries(allEntries);
+  }
+
+  function reorderFrame(sceneKey: number, fromIdx: number, toIdx: number) {
+    if (fromIdx === toIdx) return;
+    const cur = localSceneFrames.get(sceneKey) ?? [];
+    const next = [...cur];
+    const [moved] = next.splice(fromIdx, 1);
+    if (!moved) return;
+    next.splice(toIdx, 0, moved);
+    setLocalSceneFrames(new Map(localSceneFrames).set(sceneKey, next));
   }
 
   function splitSceneAt(sceneKey: number, frameIdx: number) {
     const allEntries = Array.from(localSceneFrames.entries()).sort((a, b) => a[0] - b[0]);
     const newEntries: [number, FrameInfo[]][] = [];
-    let newIdx = 0;
     for (const [key, frames] of allEntries) {
       if (key === sceneKey && frameIdx > 0 && frameIdx < frames.length) {
-        newEntries.push([newIdx++, frames.slice(0, frameIdx)]);
-        newEntries.push([newIdx++, frames.slice(frameIdx)]);
+        newEntries.push([key, frames.slice(0, frameIdx)]);
+        newEntries.push([-1, frames.slice(frameIdx)]);
       } else {
-        newEntries.push([newIdx++, frames]);
+        newEntries.push([key, frames]);
       }
     }
-    setLocalSceneFrames(new Map(newEntries));
+    applySceneEntries(newEntries);
+  }
+
+  function addSceneAfter(sceneKey?: number) {
+    const allEntries = Array.from(localSceneFrames.entries()).sort((a, b) => a[0] - b[0]);
+    if (allEntries.length === 0) {
+      setLocalSceneFrames(new Map([[0, []]]));
+      return;
+    }
+    const insertAfter = sceneKey === undefined
+      ? allEntries.length - 1
+      : allEntries.findIndex(([key]) => key === sceneKey);
+    const nextEntries: Array<[number, FrameInfo[]]> = [];
+    allEntries.forEach((entry, index) => {
+      nextEntries.push(entry);
+      if (index === insertAfter) nextEntries.push([-1, []]);
+    });
+    if (insertAfter < 0) nextEntries.push([-1, []]);
+    applySceneEntries(nextEntries);
+  }
+
+  function deleteScene(sceneKey: number) {
+    const allEntries = Array.from(localSceneFrames.entries()).sort((a, b) => a[0] - b[0]);
+    if (allEntries.length <= 1) {
+      setLocalSceneFrames(new Map([[0, []]]));
+      setSceneDescriptions({ 0: "" });
+      setSelectedScene(null);
+      return;
+    }
+
+    const deletePos = allEntries.findIndex(([key]) => key === sceneKey);
+    if (deletePos < 0) return;
+    const [, framesToKeep] = allEntries[deletePos];
+    const remaining = allEntries.filter((_, index) => index !== deletePos);
+    if (framesToKeep.length > 0) {
+      const targetPos = Math.max(0, deletePos - 1);
+      const [targetKey, targetFrames] = remaining[targetPos];
+      remaining[targetPos] = [targetKey, [...targetFrames, ...framesToKeep]];
+    }
+    applySceneEntries(remaining);
+    setSelectedScene((prev) => prev === sceneKey ? null : prev);
+  }
+
+  function moveScene(sceneKey: number, direction: -1 | 1) {
+    const allEntries = Array.from(localSceneFrames.entries()).sort((a, b) => a[0] - b[0]);
+    const fromIdx = allEntries.findIndex(([key]) => key === sceneKey);
+    const toIdx = fromIdx + direction;
+    if (fromIdx < 0 || toIdx < 0 || toIdx >= allEntries.length) return;
+    const nextEntries = [...allEntries];
+    const [moved] = nextEntries.splice(fromIdx, 1);
+    nextEntries.splice(toIdx, 0, moved);
+    applySceneEntries(nextEntries);
+    setSelectedScene(toIdx);
+  }
+
+  function moveDraggedScene(toKey: number) {
+    if (draftSceneDragKey === null || draftSceneDragKey === toKey) return;
+    const allEntries = Array.from(localSceneFrames.entries()).sort((a, b) => a[0] - b[0]);
+    const fromIdx = allEntries.findIndex(([key]) => key === draftSceneDragKey);
+    const toIdx = allEntries.findIndex(([key]) => key === toKey);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const nextEntries = [...allEntries];
+    const [moved] = nextEntries.splice(fromIdx, 1);
+    nextEntries.splice(toIdx, 0, moved);
+    applySceneEntries(nextEntries);
+    setSelectedScene(toIdx);
   }
 
   function mergeWithNext(sceneKey: number) {
@@ -202,7 +298,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
     const newEntries: [number, FrameInfo[]][] = filtered.map(([, frames], i) =>
       [i, i === keyPos ? merged : frames] as [number, FrameInfo[]]
     );
-    setLocalSceneFrames(new Map(newEntries));
+    applySceneEntries(newEntries);
   }
 
   // ── Frame-Editor ──────────────────────────────────────────────────────────
@@ -212,14 +308,17 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
     setFrameEditError(null);
     try {
       await api.updateFrame(videoId, editingFrame.filename, dataUrl);
-      const sceneIdx = editingFrame.scene_index ?? 0;
-      const sceneFrames = localSceneFrames.get(sceneIdx) ?? [];
-      const updatedFrames = sceneFrames.map((f) =>
-        f.filename === editingFrame.filename ? { ...f, dataUrl } : f
-      );
-      setLocalSceneFrames(new Map(localSceneFrames).set(sceneIdx, updatedFrames));
+      const updateEditedFrame = (frame: FrameInfo): FrameInfo =>
+        frame.filename === editingFrame.filename ? { ...frame, dataUrl } : frame;
+      const updatedSceneFrames = new Map<number, FrameInfo[]>();
+      for (const [sceneIdx, frames] of localSceneFrames.entries()) {
+        updatedSceneFrames.set(sceneIdx, frames.map(updateEditedFrame));
+      }
+      setLocalSceneFrames(updatedSceneFrames);
+      skipNextFrameStackSyncRef.current = true;
+      setFrameStack((prev) => prev ? { ...prev, frames: prev.frames.map(updateEditedFrame) } : prev);
       setCustomFrames((prev) =>
-        prev.map((f) => (f.filename === editingFrame.filename ? { ...f, dataUrl } : f))
+        prev.map(updateEditedFrame)
       );
       setEditingFrame(null);
     } catch (e) {
@@ -240,6 +339,58 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
     }
     return m;
   })();
+  const sortedScenes = Array.from(scenes.entries()).sort((a, b) => a[0] - b[0]);
+
+  function formatTime(seconds: number): string {
+    const safeSeconds = Math.max(0, seconds);
+    const minutes = Math.floor(safeSeconds / 60);
+    const rest = safeSeconds - minutes * 60;
+    return minutes > 0 ? `${minutes}:${rest.toFixed(1).padStart(4, "0")} min` : `${rest.toFixed(1)}s`;
+  }
+
+  function sceneTimeRange(frames: FrameInfo[]): { start: number; end: number; duration: number } {
+    const timestamps = frames.map((f) => f.timestamp_seconds).sort((a, b) => a - b);
+    const start = timestamps[0] ?? 0;
+    const end = timestamps[timestamps.length - 1] ?? start;
+    return { start, end, duration: Math.max(0, end - start) };
+  }
+
+  function finishWithCurrentScenes() {
+    const cleanedImagePrompts = Object.fromEntries(
+      Object.entries(imagePrompts).filter(([, prompt]) => prompt.trim()).map(([filename, prompt]) => [filename, prompt.trim()])
+    );
+    if (customFrames.length > 0) {
+      const customSet = new Set(customFrames.map((f) => f.filename));
+      const sceneGroups: string[][] = [];
+      const sceneDescriptionsForGroups: string[] = [];
+      for (const [sceneIdx, frames] of sortedScenes) {
+        const group = frames.filter((f) => customSet.has(f.filename)).map((f) => f.filename);
+        if (group.length > 0) {
+          sceneGroups.push(group);
+          sceneDescriptionsForGroups.push((sceneDescriptions[sceneIdx] ?? "").trim());
+        }
+      }
+      onDone(customFrames.map((f) => f.filename), sceneGroups, {
+        sceneDescriptions: sceneDescriptionsForGroups,
+        imagePrompts: cleanedImagePrompts,
+      });
+      return;
+    }
+
+    const sceneGroups: string[][] = [];
+    const sceneDescriptionsForGroups: string[] = [];
+    for (const [sceneIdx, frames] of sortedScenes) {
+      const group = frames.map((f) => f.filename);
+      if (group.length > 0) {
+        sceneGroups.push(group);
+        sceneDescriptionsForGroups.push((sceneDescriptions[sceneIdx] ?? "").trim());
+      }
+    }
+    onDone(sceneGroups.flat(), sceneGroups, {
+      sceneDescriptions: sceneDescriptionsForGroups,
+      imagePrompts: cleanedImagePrompts,
+    });
+  }
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
@@ -319,26 +470,260 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
               </button>
               <button
                 className="btn btn-success"
-                onClick={() => {
-                  const sortedEntries = Array.from(scenes.entries()).sort((a, b) => a[0] - b[0]);
-                  if (customFrames.length > 0) {
-                    const customSet = new Set(customFrames.map((f) => f.filename));
-                    const sceneGroups = sortedEntries
-                      .map(([, frames]) =>
-                        frames.filter((f) => customSet.has(f.filename)).map((f) => f.filename)
-                      )
-                      .filter((g) => g.length > 0);
-                    onDone(customFrames.map((f) => f.filename), sceneGroups);
-                  } else {
-                    const sceneGroups = sortedEntries.map(([, frames]) => frames.map((f) => f.filename));
-                    onDone(sceneGroups.flat(), sceneGroups);
-                  }
-                }}
+                onClick={finishWithCurrentScenes}
                 style={{ marginLeft: "auto" }}
               >
                 Weiter → Storyboard
               </button>
             </div>
+
+            {sortedScenes.length > 0 && (
+              <div
+                style={{
+                  marginTop: 14,
+                  border: "1px solid #1f3f5f",
+                  background: "#0b1726",
+                  borderRadius: 6,
+                  padding: "12px 14px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                  <span style={{ color: "#4fc3f7", fontWeight: 700, fontSize: 14 }}>
+                    Szenen-Entwurf
+                  </span>
+                  <span style={{ color: "#6f8aa5", fontSize: 12 }}>
+                    Wird so an das Storyboard uebergeben
+                  </span>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ marginLeft: "auto", fontSize: 12, padding: "4px 10px", color: "#4fc3f7" }}
+                    onClick={() => addSceneAfter()}
+                    title="Leere Szene am Ende hinzufuegen"
+                  >
+                    + Szene
+                  </button>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                  {sortedScenes.map(([sceneIdx, frames], draftIdx) => {
+                    const range = sceneTimeRange(frames);
+                    const isSceneDragOver = draftSceneDragKey !== null && draftSceneDragKey !== sceneIdx;
+                    const isFrameDropTarget = sceneCrossDragOver === sceneIdx;
+                    return (
+                      <div
+                        key={sceneIdx}
+                        onDragOver={(e) => {
+                          if (draftSceneDragKey !== null || sceneDragInfo) {
+                            e.preventDefault();
+                            if (sceneDragInfo && sceneDragInfo.sceneIdx !== sceneIdx) setSceneCrossDragOver(sceneIdx);
+                          }
+                        }}
+                        onDragLeave={(e) => {
+                          if (!e.currentTarget.contains(e.relatedTarget as Node)) setSceneCrossDragOver(null);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setSceneCrossDragOver(null);
+                          if (sceneDragInfo && sceneDragInfo.sceneIdx !== sceneIdx) {
+                            const srcFrames = localSceneFrames.get(sceneDragInfo.sceneIdx) ?? [];
+                            const fn = srcFrames[sceneDragInfo.frameIdx]?.filename;
+                            if (fn) moveFrameBetweenScenes(sceneDragInfo.sceneIdx, sceneIdx, fn);
+                            setSceneDragInfo(null);
+                            setSceneDragOver(null);
+                            return;
+                          }
+                          moveDraggedScene(sceneIdx);
+                          setDraftSceneDragKey(null);
+                        }}
+                        style={{
+                          minWidth: 0,
+                          background: "#0f2133",
+                          border: isFrameDropTarget || isSceneDragOver ? "1px dashed #4fc3f7" : "1px solid #203b56",
+                          borderRadius: 6,
+                          padding: 8,
+                          transition: "border 0.15s",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7, flexWrap: "wrap" }}>
+                          <span
+                            draggable
+                            title="Szene ziehen zum Verschieben"
+                            onDragStart={(e) => {
+                              setDraftSceneDragKey(sceneIdx);
+                              e.dataTransfer.effectAllowed = "move";
+                            }}
+                            onDragEnd={() => setDraftSceneDragKey(null)}
+                            style={{
+                              color: "#4fc3f7",
+                              cursor: "grab",
+                              fontSize: 13,
+                              userSelect: "none",
+                            }}
+                          >
+                            ↕
+                          </span>
+                          <strong style={{ color: "#90caf9", fontSize: 13 }}>Szene {draftIdx + 1}</strong>
+                          <span style={{ color: "#6f8aa5", fontSize: 11 }}>{frames.length} Frames</span>
+                          <button
+                            className="btn btn-ghost"
+                            style={{ marginLeft: "auto", fontSize: 10, padding: "1px 6px" }}
+                            onClick={() => moveScene(sceneIdx, -1)}
+                            disabled={draftIdx === 0}
+                            title="Szene nach oben verschieben"
+                          >
+                            ↑
+                          </button>
+                          <button
+                            className="btn btn-ghost"
+                            style={{ fontSize: 10, padding: "1px 6px" }}
+                            onClick={() => moveScene(sceneIdx, 1)}
+                            disabled={draftIdx === sortedScenes.length - 1}
+                            title="Szene nach unten verschieben"
+                          >
+                            ↓
+                          </button>
+                          <button
+                            className="btn btn-ghost"
+                            style={{ fontSize: 10, padding: "1px 6px", color: "#4fc3f7" }}
+                            onClick={() => addSceneAfter(sceneIdx)}
+                            title="Neue Szene nach dieser Szene einfuegen"
+                          >
+                            +
+                          </button>
+                          <button
+                            className="btn btn-ghost"
+                            style={{ fontSize: 10, padding: "1px 6px", color: "#ef9090" }}
+                            onClick={() => deleteScene(sceneIdx)}
+                            title={frames.length > 0 ? "Szene loeschen und Bilder in die vorherige Szene uebernehmen" : "Leere Szene loeschen"}
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div style={{ display: "flex", gap: 4, marginBottom: 7, minHeight: 34, flexWrap: "wrap" }}>
+                          {frames.length === 0 && (
+                            <span style={{ color: "#6f8aa5", fontSize: 11, fontStyle: "italic", alignSelf: "center" }}>
+                              Bilder hier ablegen
+                            </span>
+                          )}
+                          {frames.map((f, frameIdx) => {
+                            const isDragging = sceneDragInfo?.sceneIdx === sceneIdx && sceneDragInfo.frameIdx === frameIdx;
+                            const isDropTarget = sceneDragOver?.sceneIdx === sceneIdx && sceneDragOver.frameIdx === frameIdx;
+                            return (
+                            <div
+                              key={f.filename}
+                              draggable
+                              title="Bild ziehen zum Anordnen oder in andere Szene verschieben"
+                              onDragStart={(e) => handleSceneFrameDragStart(e, sceneIdx, frameIdx)}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setSceneDragOver({ sceneIdx, frameIdx });
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (sceneDragInfo?.sceneIdx === sceneIdx) {
+                                  reorderFrame(sceneIdx, sceneDragInfo.frameIdx, frameIdx);
+                                } else if (sceneDragInfo) {
+                                  const srcFrames = localSceneFrames.get(sceneDragInfo.sceneIdx) ?? [];
+                                  const fn = srcFrames[sceneDragInfo.frameIdx]?.filename;
+                                  if (fn) moveFrameBetweenScenes(sceneDragInfo.sceneIdx, sceneIdx, fn);
+                                }
+                                setSceneDragInfo(null);
+                                setSceneDragOver(null);
+                              }}
+                              onDragEnd={() => { setSceneDragInfo(null); setSceneDragOver(null); }}
+                              style={{
+                                position: "relative",
+                                cursor: "grab",
+                                outline: isDropTarget ? "2px solid #4fc3f7" : "none",
+                                outlineOffset: 1,
+                                opacity: isDragging ? 0.35 : 1,
+                              }}
+                            >
+                              <img
+                                src={f.dataUrl ?? api.frameImageUrl(videoId, f.filename)}
+                                alt=""
+                                draggable={false}
+                                style={{
+                                  width: 52,
+                                  height: 30,
+                                  objectFit: "cover",
+                                  borderRadius: 3,
+                                  border: "1px solid #2a4a6a",
+                                  display: "block",
+                                }}
+                                loading="lazy"
+                              />
+                              <textarea
+                                value={imagePrompts[f.filename] ?? ""}
+                                placeholder="KI-Anweisung..."
+                                rows={2}
+                                draggable={false}
+                                onClick={(e) => e.stopPropagation()}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onDragStart={(e) => e.preventDefault()}
+                                onChange={(e) => setImagePrompts((prev) => ({
+                                  ...prev,
+                                  [f.filename]: e.target.value,
+                                }))}
+                                style={{
+                                  width: 72,
+                                  boxSizing: "border-box",
+                                  marginTop: 3,
+                                  padding: "2px 4px",
+                                  fontSize: 9,
+                                  lineHeight: 1.25,
+                                  background: "#0a1724",
+                                  color: "#c8e6ff",
+                                  border: (imagePrompts[f.filename] ?? "").trim()
+                                    ? "1px solid #4fc3f7"
+                                    : "1px solid #203b56",
+                                  borderRadius: 3,
+                                  resize: "vertical",
+                                  fontFamily: "inherit",
+                                  cursor: "text",
+                                }}
+                              />
+                            </div>
+                            );
+                          })}
+                        </div>
+                        <div style={{ color: "#9fb4c8", fontSize: 11, lineHeight: 1.45 }}>
+                          {formatTime(range.start)} bis {formatTime(range.end)}
+                          <br />
+                          Dauer ca. {formatTime(range.duration || 5)}
+                        </div>
+                        <textarea
+                          value={sceneDescriptions[sceneIdx] ?? ""}
+                          onChange={(e) => setSceneDescriptions((prev) => ({ ...prev, [sceneIdx]: e.target.value }))}
+                          rows={2}
+                          placeholder="Kurze Szenenbeschreibung..."
+                          onClick={(e) => e.stopPropagation()}
+                          onDragStart={(e) => e.preventDefault()}
+                          style={{
+                            width: "100%",
+                            boxSizing: "border-box",
+                            marginTop: 7,
+                            padding: "5px 6px",
+                            minHeight: 44,
+                            fontSize: 11,
+                            lineHeight: 1.35,
+                            background: "#0a1724",
+                            color: "#c8e6ff",
+                            border: (sceneDescriptions[sceneIdx] ?? "").trim()
+                              ? "1px solid #4fc3f7"
+                              : "1px solid #203b56",
+                            borderRadius: 4,
+                            resize: "vertical",
+                            fontFamily: "inherit",
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Eigene Auswahl-Leiste */}
             {customFrames.length > 0 && (
@@ -415,12 +800,13 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
       {/* Szenen-Uebersicht */}
       {frameStack && (
         <div>
-          {Array.from(scenes.entries()).map(([sceneIdx, frames]) => {
+          {sortedScenes.map(([sceneIdx, frames], draftIdx) => {
             const isExpanded = expandedScenes.has(sceneIdx);
             const showAll = selectionMode || isExpanded;
             const visibleFrames = showAll ? frames : frames.slice(0, 8);
             const hasMore = !showAll && frames.length > 8;
             const selectedInScene = frames.filter((f) => customFilenames.has(f.filename)).length;
+            const range = sceneTimeRange(frames);
 
             return (
               <div
@@ -451,6 +837,9 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                 <div style={{ display: "flex", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
                   <h3 style={{ margin: 0, color: "#90caf9", fontSize: 15 }}>Szene {sceneIdx + 1}</h3>
                   <span style={{ color: "#666", fontSize: 12 }}>{frames.length} Frames</span>
+                  <span style={{ color: "#6f8aa5", fontSize: 12 }}>
+                    Entwurf {draftIdx + 1}: {formatTime(range.start)} bis {formatTime(range.end)}
+                  </span>
                   {selectionMode && (
                     <span style={{ color: selectedInScene > 0 ? "#4fc3f7" : "#556", fontSize: 12 }}>
                       {selectedInScene} / {frames.length} ausgewaehlt
@@ -489,6 +878,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                     className="btn btn-ghost"
                     style={{ marginLeft: "auto", padding: "4px 10px", fontSize: 12 }}
                     onClick={() => setSelectedScene(selectedScene === sceneIdx ? null : sceneIdx)}
+                    disabled={frames.length === 0}
                   >
                     {selectedScene === sceneIdx ? "Schliessen" : "Carousel"}
                   </button>

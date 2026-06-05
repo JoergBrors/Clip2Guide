@@ -154,6 +154,7 @@ Das Projekt verwendet **zwei separate** `tsconfig.json`-Dateien.
 | `gTTS` | Text-to-Speech (Google TTS) |
 | `opencv-python` | Pause-Erkennung (pause_detector.py) |
 | `httpx` | Async HTTP (intern genutzt) |
+| `python-docx` | DOCX-Handbuch-Rendering |
 
 ---
 
@@ -176,6 +177,13 @@ Das Projekt verwendet **zwei separate** `tsconfig.json`-Dateien.
 3. Falls neuer Router: in `backend/app/main.py` per `app.include_router()` einbinden
 4. Request/Response-Modelle in `backend/app/models.py` ergänzen
 5. Frontend-Wrapper in `frontend/src/api/backendClient.ts` ergänzen
+
+### Projektstand exportieren/importieren
+
+- Export: `POST /api/videos/{video_id}/export-project`
+- Download: `GET /api/videos/{video_id}/project/{filename}`
+- Import: `POST /api/projects/import` mit ZIP-Datei und `restore_mode=new_id|overwrite`
+- Der Import validiert Manifest, Pfade und SHA256-Pruefsummen und schreibt nur in erwartete Workspace-Verzeichnisse.
 
 ### Neuen Workflow-Schritt im Frontend hinzufügen
 

@@ -258,6 +258,88 @@ def _throttle_alternatives(current_provider: str, current_model: str) -> list[di
         raise ValueError(f"Unbekannter AI-Provider: {provider_name}")
 
 
+def _build_analyze_master_context(req: AnalyzeRequest, provider_name: str, model_name: str) -> dict:
+    """Erzeugt den unveraenderlichen Master-Kontext der Erstanalyse."""
+    scenes: list[dict] = []
+    for idx, group in enumerate(req.scene_groups or []):
+        scenes.append({
+            "scene_index": idx,
+            "description": req.scene_descriptions[idx] if idx < len(req.scene_descriptions) else "",
+            "frames": group,
+            "image_prompts": {
+                fn: req.image_prompts[fn]
+                for fn in group
+                if req.image_prompts.get(fn, "").strip()
+            },
+        })
+    return {
+        "provider": provider_name,
+        "model": model_name,
+        "languages": req.languages,
+        "master_prompt": req.master_prompt.strip(),
+        "selected_frames": req.selected_frames,
+        "scene_groups": scenes,
+        "instruction": (
+            "Dieser Master-Kontext stammt aus der initialen Storyboard-Erstellung. "
+            "Bei spaeteren Szenen-Rewrites muss diese Gesamtanweisung erhalten bleiben; "
+            "Aenderungen duerfen sie nur ergaenzen, nicht ersetzen."
+        ),
+    }
+
+
+def _append_change_history(storyboard: StoryboardJson, change_summary: str, context: dict | None = None) -> None:
+    """Fuegt einen kompakten Eintrag zur Storyboard-Aenderungshistorie hinzu."""
+    history = storyboard.metadata.get("ai_change_history", [])
+    if not isinstance(history, list):
+        history = []
+    entry = {
+        "index": len(history) + 1,
+        "summary": change_summary,
+    }
+    if context:
+        entry["context"] = context
+    history.append(entry)
+    storyboard.metadata["ai_change_history"] = history[-50:]
+
+
+def _build_storyboard_context_hint(storyboard: StoryboardJson) -> str:
+    """Fasst Master-Kontext, Historie und aktuelle Storyboard-Struktur fuer Rewrites zusammen."""
+    master = storyboard.metadata.get("ai_master_context")
+    history = storyboard.metadata.get("ai_change_history", [])
+    lines: list[str] = [
+        "Gesamt-Kontext des Storyboards:",
+        "Bewahre den urspruenglichen Master-Kontext und die erzählerische Kontinuitaet.",
+    ]
+    if master:
+        lines.append("Urspruenglicher Master-Kontext:")
+        lines.append(str(master))
+    if history:
+        lines.append("Aenderungshistorie:")
+        for item in history[-20:]:
+            lines.append(f"  {item}")
+    lines.append("Aktuelle Storyboard-Struktur:")
+    for idx, scene in enumerate(storyboard.scenes, 1):
+        text_bits = []
+        for lang, panel in scene.texts.items():
+            text_bits.append(
+                f"{lang}: heading={panel.heading!r}; body={panel.body!r}; "
+                f"speaker_notes={panel.speaker_notes!r}"
+            )
+        lines.append(
+            f"  Szene {idx} ({scene.scene_id}): frames={scene.image_group}; "
+            f"duration={scene.duration_seconds:.1f}s; texts={' | '.join(text_bits)}"
+        )
+    return "\n".join(lines)
+
+
+def _extract_master_context_from_request(req: RewriteSceneRequest) -> dict | None:
+    """Liest einen vom Client aktualisierten Master-Kontext aus dem Rewrite-Kontext."""
+    if not req.storyboard_context:
+        return None
+    master_context = req.storyboard_context.get("master_context")
+    return master_context if isinstance(master_context, dict) else None
+
+
 async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
     loop = asyncio.get_event_loop()
     try:
@@ -287,6 +369,7 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
         provider = _get_provider(req)
         provider_name = req.ai_provider.value if req.ai_provider else settings.ai_provider
         model_name = _get_effective_model(provider_name, req.ai_model)
+        master_prompt = req.master_prompt.strip()
 
         if req.scene_groups:
             # ── Nutzer-definierte Szenen-Gruppen: KI einmal pro Gruppe aufrufen ──────────
@@ -304,10 +387,37 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
                     continue
                 await _send(job_id, "progress", "analyze",
                             f"Szene {g_idx + 1}/{total_groups}: {len(group_paths)} Bilder...", pct_base)
-                prompt_extra = (
+                prompt_parts = [
                     f"Erstelle genau EINE Szene mit scene_id '{scene_id}'. "
-                    "Alle gezeigten Bilder gehoeren zusammen zu dieser einen Szene."
+                    "Alle gezeigten Bilder gehoeren zusammen zu dieser einen Szene.",
+                ]
+                if master_prompt:
+                    prompt_parts.insert(
+                        0,
+                        "Allgemein vorangestellter Master-Prompt des Nutzers:\n"
+                        f"{master_prompt}"
+                    )
+                scene_description = (
+                    req.scene_descriptions[g_idx].strip()
+                    if g_idx < len(req.scene_descriptions)
+                    else ""
                 )
+                if scene_description:
+                    prompt_parts.append(
+                        "Kurze Nutzerbeschreibung dieser Szene:\n"
+                        f"{scene_description}"
+                    )
+                image_prompt_lines = []
+                for fn in group_filenames:
+                    image_prompt = req.image_prompts.get(fn, "").strip()
+                    if image_prompt:
+                        image_prompt_lines.append(f"  Bild '{fn}': {image_prompt}")
+                if image_prompt_lines:
+                    prompt_parts.append(
+                        "Bildspezifische KI-Anweisungen des Nutzers:\n"
+                        + "\n".join(image_prompt_lines)
+                    )
+                prompt_extra = "\n\n".join(prompt_parts)
                 sys_prompt = build_analysis_prompt(req.languages, video_id, prompt_extra, len(group_paths))
                 await _send(job_id, "debug", "analyze",
                             f"[Szene {g_idx + 1}/{total_groups}]  Provider: {provider_name} / {model_name}\n"
@@ -324,6 +434,11 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
                     s = group_sb.scenes[0]
                     s.scene_id = scene_id
                     s.image_group = [fn for fn in group_filenames if fn in all_frame_map]
+                    s.image_prompts = {
+                        fn: req.image_prompts[fn].strip()
+                        for fn in s.image_group
+                        if req.image_prompts.get(fn, "").strip()
+                    }
                     if s.image_group:
                         s.start_frame = s.image_group[0]
                         s.end_frame = s.image_group[-1] if len(s.image_group) > 1 else None
@@ -340,7 +455,12 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
         else:
             # ── Standard: KI erkennt Szenen selbst ───────────────────────────────────────
             await _send(job_id, "progress", "analyze", f"Analysiere {len(frame_paths)} Frames...", 20)
-            sys_prompt = build_analysis_prompt(req.languages, video_id, "", len(frame_paths))
+            standard_prompt_extra = (
+                "Allgemein vorangestellter Master-Prompt des Nutzers:\n"
+                f"{master_prompt}"
+                if master_prompt else ""
+            )
+            sys_prompt = build_analysis_prompt(req.languages, video_id, standard_prompt_extra, len(frame_paths))
             await _send(job_id, "debug", "analyze",
                         f"Provider: {provider_name} / {model_name}\n"
                         f"Frames gesamt: {len(frame_paths)}\n\n"
@@ -350,7 +470,7 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
             storyboard = await _call_with_retry(
                 job_id, "analyze",
                 provider.analyze_frames, 20,
-                frame_paths, req.languages, video_id,
+                frame_paths, req.languages, video_id, standard_prompt_extra,
             )
 
         # Quellvideo eintragen
@@ -359,6 +479,8 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
             cut_path if cut_path.exists() else settings.upload_dir / f"{video_id}.mp4"
         )
         storyboard.cut_video = str(cut_path) if cut_path.exists() else None
+        storyboard.metadata["ai_master_context"] = _build_analyze_master_context(req, provider_name, model_name)
+        storyboard.metadata["ai_change_history"] = []
 
         await _send(job_id, "progress", "analyze", "Speichere Storyboard...", 90)
         _storyboard_svc.save(storyboard)
@@ -407,6 +529,23 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
     loop = asyncio.get_event_loop()
     try:
         await _send(job_id, "progress", "rewrite", "Lade Frames...", 10)
+        persisted_storyboard: StoryboardJson | None = None
+        if _storyboard_svc.exists(video_id):
+            persisted_storyboard = _storyboard_svc.load(video_id)
+            should_save_context = False
+            updated_master_context = _extract_master_context_from_request(req)
+            if updated_master_context:
+                persisted_storyboard.metadata["ai_master_context"] = updated_master_context
+                should_save_context = True
+            if req.change_summary:
+                _append_change_history(
+                    persisted_storyboard,
+                    req.change_summary,
+                    req.storyboard_context,
+                )
+                should_save_context = True
+            if should_save_context:
+                _storyboard_svc.save(persisted_storyboard)
         frames_dir = settings.frames_dir / video_id
         # Reihenfolge aus req.image_group beibehalten (entspricht der vom Nutzer
         # im Editor festgelegten Anordnung per Drag & Drop) – kein sorted()!
@@ -473,6 +612,10 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
         prompt_extra = "\n\n".join(filter(None, [
             f"Hinweis: Diese Frames gehoeren alle zu EINER zusammenhaengenden Szene. "
             f"Erstelle genau eine Szene mit scene_id '{req.scene_id}'.",
+            _build_storyboard_context_hint(persisted_storyboard) if persisted_storyboard else "",
+            "Aktuelle Aenderung:\n" + req.change_summary if req.change_summary else "",
+            "Aktueller vom Client uebergebener Gesamtzustand:\n" + str(req.storyboard_context)
+            if req.storyboard_context else "",
             frame_order_hint,
             duration_hint,
             image_prompt_hint,
@@ -508,9 +651,12 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
             raise ValueError("KI hat keine Szene zurueckgegeben")
 
         scene_texts = storyboard.scenes[0].texts
+        scene_duration = storyboard.scenes[0].duration_seconds
         await _send(job_id, "completed", "rewrite", "Szene erfolgreich neu geschrieben.", 100, {
             "texts": {lang: t.model_dump() for lang, t in scene_texts.items()},
             "scene_id": req.scene_id,
+            "duration_seconds": scene_duration,
+            "metadata": persisted_storyboard.metadata if persisted_storyboard else {},
         })
     except Exception as exc:
         if _is_throttle_error(exc):

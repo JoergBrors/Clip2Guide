@@ -5,19 +5,43 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from app import job_store
+from app.config import settings
 from app.models import HealthResponse
-from app.routers import ai, frames, images, processing, render, upload
+from app.routers import ai, frames, images, processing, projects, render, upload
+
+
+def _cleanup_startup_cache() -> None:
+    """Entfernt temporaere Laufzeitfragmente ohne Projektdaten zu loeschen."""
+    workspace_root = settings.workspace_root.resolve()
+    tmp_dir = (workspace_root / "tmp").resolve()
+    if workspace_root == tmp_dir or workspace_root not in tmp_dir.parents:
+        raise RuntimeError(f"Unsicherer Cache-Pfad: {tmp_dir}")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[startup] Cache bereinigt: {tmp_dir}", file=sys.stderr)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    _cleanup_startup_cache()
+    yield
+
 
 app = FastAPI(
     title="Clip2Guide API",
     version="0.1.0",
     description="Backend fuer Clip2Guide – automatische Tutorial-Erstellung aus Bildschirmaufnahmen.",
+    lifespan=lifespan,
 )
 
 # CORS: nur localhost – kein oeffentlicher Zugriff
@@ -37,6 +61,7 @@ app.include_router(processing.router, prefix="/api", tags=["Processing"])
 app.include_router(frames.router,     prefix="/api", tags=["Frames"])
 app.include_router(ai.router,         prefix="/api", tags=["AI"])
 app.include_router(render.router,     prefix="/api", tags=["Render"])
+app.include_router(projects.router,   prefix="/api", tags=["Projects"])
 
 # ── Health ────────────────────────────────────────────────────────────────────
 

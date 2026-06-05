@@ -37,6 +37,12 @@ export interface FrameStack {
   total_frames: number;
 }
 
+export interface StoryboardDraftHints {
+  masterPrompt?: string;
+  sceneDescriptions: string[];
+  imagePrompts: Record<string, string>;
+}
+
 export interface TextPanel {
   heading: string;
   body: string;
@@ -106,6 +112,20 @@ export interface NormalizeRequest {
 export interface NormalizeResponse {
   session_id: string;
   images: ImageInfo[];
+}
+
+export interface ProjectExportResponse {
+  video_id: string;
+  filename: string;
+  path: string;
+  message: string;
+}
+
+export interface ProjectImportResponse {
+  video_id: string;
+  original_video_id: string;
+  restored_files: number;
+  message: string;
 }
 
 // ── API-Funktionen ─────────────────────────────────────────────────────────────
@@ -212,6 +232,7 @@ export const api = {
     model?: string,
     selectedFrames?: string[],
     sceneGroups?: string[][],
+    draftHints?: StoryboardDraftHints | null,
   ): Promise<JobStartResponse> {
     return request<JobStartResponse>(`/api/videos/${videoId}/analyze`, {
       method: "POST",
@@ -223,6 +244,9 @@ export const api = {
         ai_model: model,
         selected_frames: selectedFrames ?? [],
         scene_groups: sceneGroups ?? null,
+        master_prompt: draftHints?.masterPrompt ?? "",
+        scene_descriptions: draftHints?.sceneDescriptions ?? [],
+        image_prompts: draftHints?.imagePrompts ?? {},
       }),
     });
   },
@@ -249,6 +273,8 @@ export const api = {
     provider?: string,
     model?: string,
     durationSeconds?: number,
+    storyboardContext?: Record<string, unknown>,
+    changeSummary?: string,
   ): Promise<JobStartResponse> {
     return request<JobStartResponse>(`/api/videos/${videoId}/rewrite-scene`, {
       method: "POST",
@@ -262,6 +288,8 @@ export const api = {
         ai_provider: provider,
         ai_model: model,
         duration_seconds: durationSeconds,
+        storyboard_context: storyboardContext,
+        change_summary: changeSummary,
       }),
     });
   },
@@ -295,6 +323,10 @@ export const api = {
     fps?: number,
     quality?: string,
     ttsSlow?: boolean,
+    outputFormats?: Array<"video" | "manual">,
+    handbookOptimize?: boolean,
+    provider?: string,
+    model?: string,
   ): Promise<JobStartResponse> {
     return request<JobStartResponse>(`/api/videos/${videoId}/render`, {
       method: "POST",
@@ -302,6 +334,10 @@ export const api = {
       body: JSON.stringify({
         video_id: videoId,
         languages,
+        output_formats: outputFormats ?? ["video"],
+        handbook_optimize: handbookOptimize ?? false,
+        ai_provider: provider,
+        ai_model: model,
         fps: fps ?? 25,
         quality: quality ?? "ausgewogen",
         tts_slow: ttsSlow ?? false,
@@ -351,6 +387,21 @@ export const api = {
         ai_model: model,
       }),
     });
+  },
+
+  exportProject(videoId: string): Promise<ProjectExportResponse> {
+    return request<ProjectExportResponse>(`/api/videos/${videoId}/export-project`, { method: "POST" });
+  },
+
+  projectDownloadUrl(videoId: string, filename: string): string {
+    return `${BASE}/api/videos/${videoId}/project/${encodeURIComponent(filename)}`;
+  },
+
+  importProjectZip(file: File, restoreMode = "new_id"): Promise<ProjectImportResponse> {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("restore_mode", restoreMode);
+    return request<ProjectImportResponse>("/api/projects/import", { method: "POST", body: form });
   },
 };
 

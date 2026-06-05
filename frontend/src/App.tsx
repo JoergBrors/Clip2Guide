@@ -7,7 +7,7 @@ import SceneEditor from "./components/SceneEditor";
 import RenderPanel from "./components/RenderPanel";
 import SetupWizard from "./components/SetupWizard";
 import SettingsPanel from "./components/SettingsPanel";
-import type { ImageInfo } from "./api/backendClient";
+import type { ImageInfo, StoryboardDraftHints } from "./api/backendClient";
 import { api } from "./api/backendClient";
 
 type Step = "upload" | "image-adjust" | "processing" | "frames" | "storyboard" | "render";
@@ -43,6 +43,7 @@ export default function App(): React.ReactElement {
   const [project, setProject] = useState<ProjectState | null>(null);
   const [selectedFrames, setSelectedFrames] = useState<string[]>([]);
   const [sceneGroups, setSceneGroups] = useState<string[][] | null>(null);
+  const [draftHints, setDraftHints] = useState<StoryboardDraftHints | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Setup-Wizard: URL-Parameter ?setup=1 signalisiert, dass das Einrichtungsfenster aktiv ist.
@@ -88,20 +89,35 @@ export default function App(): React.ReactElement {
     setStep("frames");
   }
 
-  function handleFramesDone(frames: string[], groups: string[][]) {
+  function handleFramesDone(frames: string[], groups: string[][], hints: StoryboardDraftHints) {
     setSelectedFrames(frames);
     setSceneGroups(groups.length > 0 ? groups : null);
+    setDraftHints(hints);
     setStep("storyboard");
   }
 
-  function handleImageFramesDone(frames: string[], groups: string[][]) {
+  function handleImageFramesDone(frames: string[], groups: string[][], hints: StoryboardDraftHints) {
     setSelectedFrames(frames);
     setSceneGroups(groups.length > 0 ? groups : null);
+    setDraftHints(hints);
     setStep("storyboard");
   }
 
   function handleStoryboardDone() {
     setStep("render");
+  }
+
+  function handleProjectImported(videoId: string) {
+    setProject({
+      mode: "images",
+      videoId,
+      filename: `Import ${videoId}`,
+      hasAudio: false,
+    });
+    setSelectedFrames([]);
+    setSceneGroups(null);
+    setDraftHints(null);
+    setStep("storyboard");
   }
 
   const currentSteps = project?.mode === "images" ? IMAGE_STEPS : VIDEO_STEPS;
@@ -151,7 +167,11 @@ export default function App(): React.ReactElement {
 
       <main style={styles.main}>
         {step === "upload" && (
-          <VideoUpload onUploaded={handleUploaded} onImagesUploaded={handleImagesUploaded} />
+          <VideoUpload
+            onUploaded={handleUploaded}
+            onImagesUploaded={handleImagesUploaded}
+            onProjectImported={handleProjectImported}
+          />
         )}
         {step === "image-adjust" && project?.imageSessionId && project.imageInfos && (
           <ImageAdjust
@@ -188,6 +208,7 @@ export default function App(): React.ReactElement {
             videoId={project.videoId}
             selectedFrames={selectedFrames}
             sceneGroups={sceneGroups}
+            draftHints={draftHints}
             onDone={handleStoryboardDone}
           />
         )}
@@ -196,11 +217,12 @@ export default function App(): React.ReactElement {
             videoId={project.videoId}
             selectedFrames={selectedFrames}
             sceneGroups={sceneGroups}
+            draftHints={draftHints}
             onDone={handleStoryboardDone}
           />
         )}
         {step === "render" && project && (
-          <RenderPanel videoId={project.videoId} />
+          <RenderPanel videoId={project.videoId} onProjectImported={handleProjectImported} />
         )}
       </main>
     </div>

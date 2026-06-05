@@ -12,13 +12,17 @@ interface LocalImage {
 interface Props {
   onUploaded: (videoId: string, filename: string, hasAudio: boolean) => void;
   onImagesUploaded: (sessionId: string, images: ImageInfo[]) => void;
+  onProjectImported: (videoId: string) => void;
 }
 
-export default function VideoUpload({ onUploaded, onImagesUploaded }: Props): React.ReactElement {
+export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImported }: Props): React.ReactElement {
   const videoInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const restoreInputRef = useRef<HTMLInputElement>(null);
 
   const [mode, setMode] = useState<UploadMode>("video");
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
 
   // ── Video-State ────────────────────────────────────────────────────────────
   const [videoUploading, setVideoUploading] = useState(false);
@@ -105,9 +109,44 @@ export default function VideoUpload({ onUploaded, onImagesUploaded }: Props): Re
     }
   }
 
+  async function restoreProject(file: File | null) {
+    if (!file) return;
+    setRestoreBusy(true);
+    setRestoreError(null);
+    try {
+      const result = await api.importProjectZip(file, "new_id");
+      onProjectImported(result.video_id);
+    } catch (e: unknown) {
+      setRestoreError(e instanceof Error ? e.message : "Projekt-Wiederherstellung fehlgeschlagen");
+    } finally {
+      setRestoreBusy(false);
+      if (restoreInputRef.current) restoreInputRef.current.value = "";
+    }
+  }
+
   return (
     <div className="card" style={{ maxWidth: 720, margin: "32px auto" }}>
       <h2 style={{ marginTop: 0, color: "#4fc3f7" }}>Hochladen</h2>
+
+      <div style={{ marginBottom: 20, padding: "10px 12px", border: "1px solid #273452", borderRadius: 6, background: "#10182d" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 13, color: "#90caf9", marginRight: 4 }}>Projekt wiederherstellen:</span>
+          <label className="btn btn-ghost" style={{ cursor: restoreBusy ? "default" : "pointer" }}>
+            {restoreBusy ? "Projektstand wird wiederhergestellt..." : "ZIP auswählen"}
+            <input
+              ref={restoreInputRef}
+              type="file"
+              accept=".zip,application/zip"
+              disabled={restoreBusy}
+              onChange={(e) => restoreProject(e.target.files?.[0] ?? null)}
+              style={{ display: "none" }}
+            />
+          </label>
+        </div>
+        {restoreError && (
+          <p role="alert" style={{ color: "#ef5350", fontSize: 12, margin: "8px 0 0" }}>{restoreError}</p>
+        )}
+      </div>
 
       {/* Modus-Tabs */}
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>

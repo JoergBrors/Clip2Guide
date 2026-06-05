@@ -114,6 +114,10 @@ class AnalyzeRequest(BaseModel):
     languages: List[str] = Field(default_factory=lambda: ["de"])
     ai_provider: Optional[AiProvider] = None
     ai_model: Optional[str] = None  # Wenn gesetzt, ueberschreibt den Default-Modellnamen
+    master_prompt: str = Field(
+        default="",
+        description="Allgemein vorangestellter Nutzer-Prompt fuer die initiale Storyboard-Erstellung."
+    )
     selected_frames: List[str] = Field(
         default_factory=list,
         description="Dateinamen der ausgewaehlten Frames. Leer = alle Frames verwenden."
@@ -123,11 +127,29 @@ class AnalyzeRequest(BaseModel):
         description="Vom Nutzer vordefinierte Szenen-Gruppen (Liste von Frame-Dateinamen pro Szene). "
                     "Wenn gesetzt, wird die KI je Gruppe separat aufgerufen und die Szenen-Erkennung uebersprungen."
     )
+    scene_descriptions: List[str] = Field(
+        default_factory=list,
+        description="Optionale kurze Nutzerbeschreibung pro scene_groups-Eintrag."
+    )
+    image_prompts: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Dateiname -> optionale KI-Anweisung pro Bild fuer die Erst-Analyse."
+    )
 
 
 class RenderRequest(BaseModel):
     video_id: str
     languages: List[str] = Field(default_factory=lambda: ["de"])
+    output_formats: List[str] = Field(
+        default_factory=lambda: ["video"],
+        description="Ausgabeformate: video, manual oder beide."
+    )
+    handbook_optimize: bool = Field(
+        default=False,
+        description="Wenn true, werden Texte fuer das DOCX-Handbuch per KI optimiert."
+    )
+    ai_provider: Optional[AiProvider] = None
+    ai_model: Optional[str] = None
     fps: int = Field(default=25, ge=10, le=60)
     quality: str = Field(default="ausgewogen")   # schnell | ausgewogen | beste
     tts_slow: bool = Field(default=False)
@@ -154,6 +176,14 @@ class RewriteSceneRequest(BaseModel):
     duration_seconds: Optional[float] = Field(
         None,
         description="Gewuenschte Szenenlaenge in Sekunden – bestimmt die angestrebte Laenge der speaker_notes."
+    )
+    storyboard_context: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Aktueller Gesamt-Kontext des Storyboards fuer kontextbewusste Rewrites."
+    )
+    change_summary: Optional[str] = Field(
+        None,
+        description="Kurzbeschreibung der Aenderung, die diesen Rewrite ausgeloest hat."
     )
 
 

@@ -15,3 +15,4 @@ imageio
 imageio-ffmpeg
 google-genai
 openai
+python-docx

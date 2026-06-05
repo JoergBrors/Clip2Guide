@@ -261,8 +261,13 @@ Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
   "languages": ["de", "en"],
   "ai_provider": "gemini",
   "ai_model": "gemini-2.5-flash",
+  "master_prompt": "Erstelle ein zusammenhaengendes Tutorial-Storyboard fuer Einsteiger.",
   "selected_frames": ["frame_001.jpg", "frame_004.jpg"],
-  "scene_groups": null
+  "scene_groups": [["frame_001.jpg", "frame_004.jpg"]],
+  "scene_descriptions": ["Kurze Beschreibung der Szene als Nutzerhinweis."],
+  "image_prompts": {
+    "frame_001.jpg": "Fokussiere auf das geoeffnete Menue."
+  }
 }
 ```
 
@@ -272,8 +277,11 @@ Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
 | `languages` | string[] | Zielsprachen (ISO-639-1), min. eine |
 | `ai_provider` | string\|null | `gemini` \| `openai` \| `azure_openai` \| `azure_cognitive`; null = Default aus .env |
 | `ai_model` | string\|null | Modellname; null = Default des Providers |
+| `master_prompt` | string | Allgemein vorangestellte Gesamtanweisung fuer die initiale Storyboard-Erstellung; wird in `metadata.ai_master_context` gespeichert |
 | `selected_frames` | string[] | Dateinamen der Frames die an die KI übergeben werden; leer = alle |
 | `scene_groups` | string[][]\|null | Vom Nutzer vordefinierte Szenen-Gruppen; die KI wird je Gruppe separat aufgerufen |
+| `scene_descriptions` | string[] | Optional: kurze Nutzerbeschreibung pro `scene_groups`-Eintrag |
+| `image_prompts` | object | Optional: Dateiname → KI-Anweisung pro Bild für die Erst-Analyse |
 
 **Response** `200 OK`
 ```json
@@ -335,7 +343,13 @@ Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
   "image_prompts": {
     "frame_010.jpg": "Fokussiere auf das rote Symbol oben links."
   },
-  "duration_seconds": 8.0
+  "duration_seconds": 8.0,
+  "storyboard_context": {
+    "master_context": {},
+    "change_history": [],
+    "scenes": []
+  },
+  "change_summary": "Bild frame_010.jpg wurde zu Szene 3 hinzugefuegt."
 }
 ```
 
@@ -346,6 +360,8 @@ Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
 | `current_texts` | Optional: Bestehende Texte als Kontext für die KI |
 | `image_prompts` | Optional: Dateiname → KI-Anweisung pro Bild |
 | `duration_seconds` | Optional: Ziel-Szenenläng in Sekunden (bestimmt speaker_notes-Länge) |
+| `storyboard_context` | Optional: aktueller Gesamtzustand des Storyboards fuer kontextbewusste Rewrites; `master_context` darf den aus dem Editor aktualisierten `ai_master_context` inklusive aktueller Szenenbeschreibungen enthalten |
+| `change_summary` | Optional: Kurzbeschreibung der Änderung; wird in `metadata.ai_change_history` fortgeschrieben |
 
 **Response** `200 OK`
 ```json
@@ -403,6 +419,10 @@ Fortschritt via SSE.
 {
   "video_id": "...",
   "languages": ["de", "en"],
+  "output_formats": ["video"],
+  "handbook_optimize": false,
+  "ai_provider": null,
+  "ai_model": null,
   "fps": 25,
   "quality": "ausgewogen",
   "tts_slow": false
@@ -412,6 +432,10 @@ Fortschritt via SSE.
 | Feld | Default | Beschreibung |
 |---|---|---|
 | `languages` | `["de"]` | Sprachen die gerendert werden sollen |
+| `output_formats` | `["video"]` | Ausgabeformate: `video`, `manual` oder beide |
+| `handbook_optimize` | `false` | Optional: KI-Segmentierung fuer das DOCX-Handbuch; `body` wird als Bild-Erklaerung und `speaker_notes` als Textbausteine auf Bilder verteilt, Inhalte werden nicht umgeschrieben, Szenenstruktur bleibt unveraendert |
+| `ai_provider` | `null` | KI-Provider fuer Handbuch-Optimierung; null = Default aus `.env` |
+| `ai_model` | `null` | Modell fuer Handbuch-Optimierung; null = Provider-Default |
 | `fps` | `25` | Frames pro Sekunde (10–60) |
 | `quality` | `ausgewogen` | `schnell` \| `ausgewogen` \| `beste` |
 | `tts_slow` | `false` | Langsame TTS-Sprechgeschwindigkeit (gTTS `slow=True`) |
@@ -433,7 +457,8 @@ SSE-Events (über `/api/jobs/{job_id}/events`):
 {
   "data": {
     "output_dir": "workspace/output/...",
-    "files": ["workspace/output/.../tutorial_de.mp4"]
+    "files": ["workspace/output/.../tutorial_de.mp4"],
+    "manual_files": ["workspace/output/.../manual_de.docx"]
   }
 }
 ```
@@ -449,6 +474,60 @@ Fertige Tutorial-Video-Datei herunterladen.
 - `filename` – z.B. `tutorial_de.mp4`
 
 **Response** `200 OK` – MP4-Video (`video/mp4`)
+
+---
+
+### `GET /api/videos/{video_id}/manual/{filename}`
+
+Fertige DOCX-Handbuch-Datei herunterladen.
+
+**Path-Parameter:**
+- `video_id` – UUID des Videos
+- `filename` – z.B. `manual_de.docx`
+
+**Response** `200 OK` – DOCX-Datei (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`)
+
+---
+
+## Projektarchiv
+
+### `POST /api/videos/{video_id}/export-project`
+
+Exportiert den aktuellen Projektstand als ZIP.
+
+**Response** `200 OK`
+```json
+{
+  "video_id": "...",
+  "filename": "project_....zip",
+  "path": "workspace/output/.../project_....zip",
+  "message": "Projektstand exportiert"
+}
+```
+
+### `GET /api/videos/{video_id}/project/{filename}`
+
+Projekt-ZIP herunterladen.
+
+**Response** `200 OK` – ZIP-Datei (`application/zip`)
+
+### `POST /api/projects/import`
+
+Projektstand aus ZIP wiederherstellen.
+
+**Body:** `multipart/form-data`
+- `file` – ZIP-Datei
+- `restore_mode` – `new_id` oder `overwrite`, Default `new_id`
+
+**Response** `200 OK`
+```json
+{
+  "video_id": "new-or-existing-id",
+  "original_video_id": "...",
+  "restored_files": 42,
+  "message": "Projektstand wiederhergestellt"
+}
+```
 
 ---
 

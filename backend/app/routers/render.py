@@ -16,11 +16,13 @@ from fastapi.responses import FileResponse
 from app import job_store
 from app.config import settings
 from app.models import JobStartResponse, RenderRequest
+from app.services.manual_render_service import ManualRenderService
 from app.services.render_service import RenderService
 from app.services.storyboard_service import StoryboardService
 
 router = APIRouter()
 _render_svc = RenderService()
+_manual_svc = ManualRenderService()
 _storyboard_svc = StoryboardService()
 
 
@@ -200,6 +202,47 @@ def _render_lang_worker(
     push("progress", "render", f"[{lang}] Fertig ✓", lang_base + lang_share)
 
 
+def _render_manual_worker(
+    video_id: str,
+    lang: str,
+    req: RenderRequest,
+    job_id: str,
+    loop: asyncio.AbstractEventLoop,
+    lang_idx: int,
+    total_langs: int,
+) -> str:
+    """Erzeugt ein DOCX-Handbuch fuer eine Sprache."""
+
+    def push(type_: str, step: str, message: str, percent: int, data: dict | None = None) -> None:
+        q = job_store.job_queues.get(job_id)
+        if q is None:
+            return
+        event: dict = {"type": type_, "step": step, "message": message, "percent": percent}
+        if data:
+            event["data"] = data
+        loop.call_soon_threadsafe(q.put_nowait, event)
+
+    base = 10 + int(85 * lang_idx / max(total_langs, 1))
+    push("log", "render", f"[{lang}] Starte Handbuch-Rendering (DOCX)...", base)
+    if req.handbook_optimize:
+        push("log", "render", f"[{lang}] Optimiere Handbuchtexte per KI...", base)
+        push("progress", "render", f"[{lang}] Handbuch-KI wird vorbereitet...", base + 10)
+
+    def debug_prompt(step: str, content: str) -> None:
+        push("debug", step, f"[{lang}] {content}", base + 20, {"language": lang})
+
+    out_path = _manual_svc.render_manual(
+        video_id,
+        lang,
+        optimize=req.handbook_optimize,
+        ai_provider=req.ai_provider,
+        ai_model=req.ai_model,
+        debug_callback=debug_prompt,
+    )
+    push("log", "render", f"[{lang}] Handbuch gespeichert: {out_path}", base + 80)
+    return str(out_path)
+
+
 # ── Asynchroner Orchestrator ───────────────────────────────────────────────────
 
 async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
@@ -213,25 +256,34 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
         if not _storyboard_svc.exists(video_id):
             raise FileNotFoundError(f"Storyboard nicht gefunden fuer {video_id}")
 
+        output_formats = set(req.output_formats or ["video"])
+        valid_formats = {"video", "manual"}
+        invalid_formats = output_formats - valid_formats
+        if invalid_formats:
+            raise ValueError(f"Ungueltige Ausgabeformate: {', '.join(sorted(invalid_formats))}")
+
         # ── Szenen-Dauern vor dem Render neu berechnen ──────────────────────
         # Stellt sicher, dass kein TTS-Audio abgeschnitten wird und keine
         # Szene zu kurz ist, auch wenn der Benutzer Texte geändert hat.
         storyboard = _storyboard_svc.load(video_id)
-        await _send(
-            job_id, "log", "render",
-            f"Prüfe Szenen-Dauern für {len(storyboard.scenes)} Szenen...", 5,
-        )
-        duration_logs = _recalculate_durations(storyboard, req.languages)
-        if duration_logs:
-            _storyboard_svc.save(storyboard)
-            for log_line in duration_logs:
-                await _send(job_id, "log", "render", f"[Dauer angepasst] {log_line}", 6)
+        if "video" in output_formats:
             await _send(
                 job_id, "log", "render",
-                f"Storyboard aktualisiert: {len(duration_logs)} Szene(n) korrigiert.", 6,
+                f"Prüfe Szenen-Dauern für {len(storyboard.scenes)} Szenen...", 5,
             )
+            duration_logs = _recalculate_durations(storyboard, req.languages)
+            if duration_logs:
+                _storyboard_svc.save(storyboard)
+                for log_line in duration_logs:
+                    await _send(job_id, "log", "render", f"[Dauer angepasst] {log_line}", 6)
+                await _send(
+                    job_id, "log", "render",
+                    f"Storyboard aktualisiert: {len(duration_logs)} Szene(n) korrigiert.", 6,
+                )
+            else:
+                await _send(job_id, "log", "render", "Alle Szenen-Dauern sind plausibel ✓", 6)
         else:
-            await _send(job_id, "log", "render", "Alle Szenen-Dauern sind plausibel ✓", 6)
+            await _send(job_id, "log", "render", "Handbuch-Rendering nutzt das Storyboard unveraendert.", 6)
 
         storyboard_path = settings.ai_output_dir / video_id / "storyboard.json"
 
@@ -242,32 +294,42 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
         )
 
         total_langs = len(req.languages)
+        worker_tasks = []
+
         await _send(
             job_id, "progress", "render",
-            f"Starte {total_langs} parallele Render-Worker "
-            f"(FPS={req.fps}, Qualitaet={req.quality})...", 8,
+            f"Starte Render-Worker fuer {', '.join(sorted(output_formats))} "
+            f"({total_langs} Sprache(n))...", 8,
         )
 
-        # Pro Sprache einen eigenen subprocess-Aufruf bauen → echter Parallelismus
-        lang_cmds: list[tuple[str, list[str], str]] = []
-        for lang in req.languages:
-            cmd, out_dir = _render_svc.build_command(
-                video_id, [lang], storyboard_path,
-                fps=req.fps, quality=req.quality, tts_slow=req.tts_slow,
-            )
-            lang_cmds.append((lang, cmd, str(out_dir)))
+        if "video" in output_formats:
+            lang_cmds: list[tuple[str, list[str], str]] = []
+            for lang in req.languages:
+                cmd, out_dir = _render_svc.build_command(
+                    video_id, [lang], storyboard_path,
+                    fps=req.fps, quality=req.quality, tts_slow=req.tts_slow,
+                )
+                lang_cmds.append((lang, cmd, str(out_dir)))
 
-        # Jeden Worker als run_in_executor starten → laeuft in Default-ThreadPool,
-        # blockiert den asyncio Event-Loop nicht.
-        worker_tasks = [
-            loop.run_in_executor(
-                None,
-                _render_lang_worker,
-                lang, cmd, job_id, loop, idx, total_langs,
-                cwd,
+            worker_tasks.extend(
+                loop.run_in_executor(
+                    None,
+                    _render_lang_worker,
+                    lang, cmd, job_id, loop, idx, total_langs,
+                    cwd,
+                )
+                for idx, (lang, cmd, cwd) in enumerate(lang_cmds)
             )
-            for idx, (lang, cmd, cwd) in enumerate(lang_cmds)
-        ]
+
+        if "manual" in output_formats:
+            worker_tasks.extend(
+                loop.run_in_executor(
+                    None,
+                    _render_manual_worker,
+                    video_id, lang, req, job_id, loop, idx, total_langs,
+                )
+                for idx, lang in enumerate(req.languages)
+            )
 
         # Alle Worker parallel abwarten; return_exceptions=True sammelt alle Fehler.
         results = await asyncio.gather(*worker_tasks, return_exceptions=True)
@@ -277,10 +339,11 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
             raise RuntimeError("\n".join(errors))
 
         output_files = [str(f) for f in output_dir.glob("*.mp4")]
+        manual_files = [str(f) for f in output_dir.glob("manual_*.docx")]
         await _send(
             job_id, "completed", "render",
-            f"Rendering abgeschlossen. {len(output_files)} Datei(en).", 100,
-            {"output_dir": str(output_dir), "files": output_files},
+            f"Rendering abgeschlossen. {len(output_files)} Video(s), {len(manual_files)} Handbuch-Datei(en).", 100,
+            {"output_dir": str(output_dir), "files": output_files, "manual_files": manual_files},
         )
 
     except Exception as exc:
@@ -307,3 +370,17 @@ async def download_output(video_id: str, filename: str) -> FileResponse:
     if not path.exists() or path.suffix.lower() != ".mp4":
         raise HTTPException(status_code=404, detail="Ausgabe-Datei nicht gefunden")
     return FileResponse(str(path), media_type="video/mp4", filename=filename)
+
+
+@router.get("/videos/{video_id}/manual/{filename}")
+async def download_manual(video_id: str, filename: str) -> FileResponse:
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
+    path = settings.render_output_dir / video_id / filename
+    if not path.exists() or path.suffix.lower() != ".docx" or not filename.startswith("manual_"):
+        raise HTTPException(status_code=404, detail="Handbuch-Datei nicht gefunden")
+    return FileResponse(
+        str(path),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=filename,
+    )

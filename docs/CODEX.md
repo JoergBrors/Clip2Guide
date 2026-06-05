@@ -80,6 +80,8 @@ Clip2Guide/
 │       │   ├── frame_extractor.py        # FrameExtractor
 │       │   ├── frame_stack_service.py    # FrameStackService (JSON persist.)
 │       │   ├── storyboard_service.py     # StoryboardService + build_analysis_prompt() + build_enrich_prompt()
+│       │   ├── manual_render_service.py  # ManualRenderService: DOCX-Handbuch + optionale KI-Textoptimierung
+│       │   ├── project_archive_service.py # ProjectArchiveService: ZIP Export/Import kompletter Projektstaende
 │       │   ├── video_normalizer.py       # VideoNormalizer (async)
 │       │   ├── pause_detector.py         # OpenCV Pause-Erkennung
 │       │   └── render_service.py         # RenderService.build_command()
@@ -181,12 +183,19 @@ class AnalyzeRequest(BaseModel):
     languages: List[str] = ["de"]
     ai_provider: Optional[AiProvider] = None
     ai_model: Optional[str] = None
+    master_prompt: str = ""                 # Allgemein vorangestellte Gesamtanweisung fuer Erst-Analyse
     selected_frames: List[str] = []
     scene_groups: Optional[List[List[str]]] = None
+    scene_descriptions: List[str] = []       # Kurzbeschreibung pro scene_groups-Eintrag
+    image_prompts: Dict[str, str] = {}       # Frame-Dateiname → KI-Anweisung fuer Erst-Analyse
 
 class RenderRequest(BaseModel):
     video_id: str
     languages: List[str] = ["de"]
+    output_formats: List[str] = ["video"]  # video | manual
+    handbook_optimize: bool = False
+    ai_provider: Optional[AiProvider] = None
+    ai_model: Optional[str] = None
     fps: int = Field(default=25, ge=10, le=60)
     quality: str = "ausgewogen"        # schnell | ausgewogen | beste
     tts_slow: bool = False
@@ -203,6 +212,8 @@ class RewriteSceneRequest(BaseModel):
     current_texts: Optional[Dict[str, TextPanel]] = None
     image_prompts: Optional[Dict[str, str]] = None
     duration_seconds: Optional[float] = None
+    storyboard_context: Optional[Dict[str, Any]] = None
+    change_summary: Optional[str] = None
 
 class EnrichRequest(BaseModel):
     languages: List[str] = ["de"]
@@ -372,6 +383,10 @@ POST /api/videos/{video_id}/enrich-scenes        → JobStartResponse (Backgroun
 POST /api/videos/{video_id}/render               → JobStartResponse (BackgroundTask)
      Body: RenderRequest
 GET  /api/videos/{video_id}/output/{filename}    → FileResponse (MP4)
+GET  /api/videos/{video_id}/manual/{filename}    → FileResponse (DOCX)
+POST /api/videos/{video_id}/export-project       → dict (ZIP Export)
+GET  /api/videos/{video_id}/project/{filename}   → FileResponse (ZIP)
+POST /api/projects/import                        → dict (ZIP Import)
 POST /api/images/upload                          → ImageSetResponse
 POST /api/images/normalize                       → dict
 POST /api/images/to-frames                       → dict
@@ -499,6 +514,7 @@ interface UploadResponse {
 interface JobStartResponse { job_id: string; video_id: string; message: string; }
 interface FrameInfo { filename: string; timestamp_seconds: number; scene_index: number | null; dataUrl?: string; }
 interface FrameStack { video_id: string; frames: FrameInfo[]; total_frames: number; }
+interface StoryboardDraftHints { masterPrompt?: string; sceneDescriptions: string[]; imagePrompts: Record<string, string>; }
 interface TextPanel { heading: string; body: string; speaker_notes: string; }
 interface RenderHints { transition?: "fade" | "cut"; image_durations?: number[]; text_scroll_speed?: number; }
 interface Scene {
@@ -631,6 +647,51 @@ USER_LOCAL_DIR: string
 1. `frontend/src/components/{Name}.tsx` erstellen
 2. `frontend/src/App.tsx` → `Step`-Enum + Steps-Array + `renderStep()` ergänzen
 3. Falls neue API-Calls: `frontend/src/api/backendClient.ts` ergänzen
+
+### Szenen-Entwurf im Frame-Schritt
+
+- `frontend/src/components/FrameStack.tsx` zeigt nach vorhandener Frame-Extraktion einen lokalen `Szenen-Entwurf` an.
+- Der Entwurf wird aus der aktuellen `localSceneFrames`-Reihenfolge berechnet und aktualisiert sich dadurch bei Split, Merge, Drag-and-drop und eigener Frame-Auswahl ohne Backend-Aufruf.
+- Szenen koennen im Entwurf hinzugefuegt, geloescht und per Pfeil-Buttons oder Drag-and-drop verschoben werden. Beim Loeschen einer Szene mit Bildern werden die Bilder in eine Nachbarszene uebernommen, damit keine Frames versehentlich verloren gehen.
+- Bilder koennen direkt im Entwurf per Drag-and-drop innerhalb einer Szene neu sortiert oder in eine andere Szene verschoben werden. Leere Szenen bleiben in `localSceneFrames` erhalten, damit sie als Drop-Ziel dienen koennen.
+- Pro Szene kann im Entwurf eine kurze Beschreibung gepflegt werden, pro Bild eine KI-Anweisung. `FrameStack` uebergibt diese Werte als `StoryboardDraftHints` an `App`, `SceneEditor` reicht sie an `api.analyzeVideo()` weiter.
+- `SceneEditor` fasst vor der Analyse die uebergebenen `sceneGroups` unten als `Storyboard-Zusammenfassung` zusammen. Die Karten zeigen Frames je Szene, Szenenbeschreibung und Markierungen fuer Frames mit KI-Anweisung.
+- `SceneEditor` bietet vor der initialen Analyse einen allgemein vorangestellten Master-Prompt an. Dieser wird als `StoryboardDraftHints.masterPrompt` an `api.analyzeVideo()` weitergereicht und als `AnalyzeRequest.master_prompt` an das Backend gesendet.
+- Der Debug-Button in `SceneEditor` zeigt eine lokale `analyse-preview` mit Provider, Modell, Sprachen, Master-Prompt, Szenen, Frame-Reihenfolge, Szenenbeschreibungen und Bild-Prompts. Nach dem KI-Start werden zusaetzlich die Backend-Debug-Events mit den tatsaechlichen Prompt-Dumps gesammelt.
+- `AnalyzeRequest.master_prompt`, `scene_descriptions` und `image_prompts` werden im Backend in `_run_analyze()` in `prompt_extra` eingebaut. Bei Nutzer-definierten `scene_groups` wird der Master-Prompt jedem Szenenaufruf vorangestellt; ohne `scene_groups` wird er dem Standard-Analyseprompt hinzugefuegt. Erfolgreich erzeugte Szenen behalten die bildspezifischen Prompts in `Scene.image_prompts`.
+- Nach der Erstanalyse schreibt `_run_analyze()` `metadata.ai_master_context` und `metadata.ai_change_history=[]` in das Storyboard. Der Master-Kontext bleibt die urspruengliche Gesamtanweisung fuer spaetere Rewrites.
+- `SceneEditor` bewahrt Bild-KI-Anweisungen zusaetzlich in `metadata.image_prompt_memory`, damit Prompts beim Verschieben/Entfernen/Wiederhinzufuegen von Bildern nicht verloren gehen.
+- `SceneEditor.buildRewriteContext()` aktualisiert vor jedem Rewrite den `master_context`: `scene_groups` werden aus der aktuellen Szenenliste neu aufgebaut, inklusive aktueller Szenenbeschreibung aus `texts`, Bildreihenfolge, Bild-Prompts und Dauer. Dadurch wird der urspruengliche Master-Prompt behalten, aber die Szenenbeschreibung entspricht dem aktuellen Editor-Zustand.
+- `RewriteSceneRequest.storyboard_context` und `change_summary` geben dem Backend bei jedem Rewrite den aktuellen Gesamtzustand und den Aenderungsgrund mit. `_run_rewrite_scene()` laedt das persistierte Storyboard, uebernimmt einen aktualisierten `storyboard_context.master_context` nach `metadata.ai_master_context`, schreibt `change_summary` in `metadata.ai_change_history`, und bettet Master-Kontext, Historie, aktuelle Gesamtstruktur, Bildreihenfolge, Bild-Prompts und aktuelle Texte in den Prompt ein.
+- `SceneEditor` berechnet `duration_seconds` nach Text- und Bildaenderungen neu (`speaker_notes/body` grob 13 Zeichen/Sekunde, mindestens 2 Sekunden und mindestens 2 Sekunden je Bild).
+- `create_tutorial.py` normalisiert `render_hints.image_durations` vor dem MoviePy-Encoding so, dass die Summe der Bild-/Panel-Clips mindestens `actual_duration` der Szene abdeckt. Zu kurze KI-Hints werden proportional auf die Szenendauer skaliert, damit `CompositeVideoClip` nicht laenger ist als seine inneren Clips.
+- Nach dem Bearbeiten eines Frames ersetzt `handleFrameEditSave()` die lokale `dataUrl` in allen Szenen, im `frameStack` und in `customFrames`. Dadurch aktualisieren sich Entwurf, Raster, Carousel-Quellen und Auswahl-Vorschauen auch dann, wenn der Frame vorher in eine andere Szene verschoben wurde.
+- `skipNextFrameStackSyncRef` verhindert nach einem Frame-Edit, dass der `useEffect([frameStack])` die manuell bearbeitete `localSceneFrames`-Szenenstruktur wieder aus den urspruenglichen `scene_index`-Werten rekonstruiert. Nach echter Extraktion oder Upload synchronisiert der Effect weiterhin normal.
+- `finishWithCurrentScenes()` nutzt dieselben sortierten Szenengruppen fuer `onDone(selectedFrames, sceneGroups)`, die im Entwurf angezeigt werden. Dadurch ist die sichtbare Struktur vor `Weiter → Storyboard` identisch mit der Struktur, die an `SceneEditor` uebergeben wird.
+- Geaendert wurden `AnalyzeRequest`, `StoryboardDraftHints`, `api.analyzeVideo()`, `SceneEditor` und der Analyse-Prompt-Aufbau in `backend/app/routers/ai.py`; der bestehende Endpunkt `POST /api/videos/{video_id}/analyze` akzeptiert dadurch zusaetzlich `master_prompt`.
+
+### Handbuch-Rendering
+
+- `RenderRequest.output_formats` steuert die Ausgaben: `["video"]`, `["manual"]` oder `["video", "manual"]`. Video bleibt der Default und nutzt weiterhin `create_tutorial.py`.
+- `RenderRequest.handbook_optimize`, `ai_provider` und `ai_model` aktivieren optional eine KI-Segmentierung fuer das DOCX-Handbuch. Die KI darf keine Inhalte umschreiben; sie darf vorhandenen `body` als Bild-Erklaerung und vorhandene `speaker_notes` als Textbausteine nur auf die Bilder derselben Szene verteilen und Uebergaenge minimal glaetten. `ManualRenderService` validiert Szenenanzahl, `scene_id` und `image_group`.
+- `backend/app/services/manual_render_service.py` erzeugt pro Sprache `workspace/output/{video_id}/manual_{lang}.docx` im A5-Querformat mit Calibri 10 pt und 1 cm Raendern. Bilder bleiben eingebettete Bilder, Texte bleiben bearbeitbarer Word-Text. Szenen werden als offizielle Handbuchabschnitte mit Bild-/Texttabellen formatiert; `body` und `speaker_notes` werden pro Szene verlustfrei auf die Bilder verteilt statt als separater Gesamtblock ausgegeben.
+- Bei aktivierter KI-Optimierung wird zusaetzlich `workspace/ai-output/{video_id}/manual_storyboard_{lang}.json` gespeichert. Das originale `storyboard.json` wird fuer Handbuch-only-Rendering nicht ueberschrieben.
+- `GET /api/videos/{video_id}/manual/{filename}` liefert fertige DOCX-Dateien aus `workspace/output/{video_id}`.
+- `frontend/src/components/RenderPanel.tsx` bietet Ausgabeformat-Auswahl, Handbuch-KI-Optimierung sowie Provider-/Modellauswahl analog zur Storyboard-Analyse.
+- Beim Handbuch-KI-Rendering sendet `_render_manual_worker()` zusaetzlich `debug`-SSE-Events fuer Prompt und KI-Antwort, damit lange `complete_text()`-Aufrufe im Debug-Log sichtbar sind.
+
+### Startup-Cache-Bereinigung
+
+- `backend/app/main.py` nutzt einen FastAPI-`lifespan`-Handler und bereinigt beim Backend-Start `workspace/tmp/`. Dadurch werden alte temporaere ZIP-Exportfragmente und sonstige Laufzeitreste entfernt, ohne persistente Uploads, Frames, Storyboards oder Outputs anzutasten.
+- `frontend/electron/main.ts` leert nach `app.whenReady()` den Electron-Session-Cache, bevor Backend/Fenster gestartet werden. Dadurch werden alte Renderer-/HTTP-Cachefragmente beim App-Start entfernt.
+
+### Projektarchiv
+
+- `backend/app/services/project_archive_service.py` sammelt `storyboard.json`, `frame_stack.json`, `manual_storyboard_*.json`, Frames, Uploads, normalized/cut Videos und Outputs in `workspace/output/{video_id}/project_{video_id}.zip`. Das ZIP wird zuerst unter `workspace/tmp/project-exports/` erstellt und danach in den Projekt-Output verschoben, damit das Archiv nie sich selbst oder einen alten Projekt-ZIP-Stand aus `output/` einpackt.
+- Das ZIP enthaelt `clip2guide-project/manifest.json` mit `schema_version`, `original_video_id`, Sprachen, Datei-Liste, SHA256 und Groessen.
+- `POST /api/projects/import` validiert Manifest, Schema-Version, Pfade, erlaubte Verzeichnisse, Groessen und SHA256. Absolute Pfade und `..` werden abgelehnt. Standard ist `restore_mode=new_id`, damit bestehende Projekte nicht ueberschrieben werden.
+- Nach Import werden `storyboard.json.video_id` und `frame_stack.json.video_id` auf die Ziel-ID gesetzt. Upload-, normalized- und cut-Dateien werden auf die Ziel-ID umbenannt.
+- `frontend/src/components/RenderPanel.tsx` enthaelt Buttons fuer ZIP-Export, ZIP-Download und ZIP-Import. `frontend/src/components/VideoUpload.tsx` bietet denselben ZIP-Import bereits im Upload-Schritt an. Nach Import setzt `App.tsx` die neue `video_id` und springt direkt zur Storyboard-Ansicht.
 
 ### Neuen API-Endpunkt hinzufügen
 
