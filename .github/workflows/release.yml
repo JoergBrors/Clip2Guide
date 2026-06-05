@@ -35,6 +35,17 @@ jobs:
           node-version: "20"
           cache: npm
 
+      # Tag-Version (z.B. v0.3.4) → package.json-Version (0.3.4) synchronisieren.
+      # npm version schreibt nur package.json, kein Git-Commit/Tag.
+      # Damit stimmen Installer-Dateiname, In-App-Version und GitHub-Release-Tag überein.
+      - name: Sync version from tag to package.json
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"           # z.B. v0.3.4
+          VERSION="${TAG#v}"                 # führendes v entfernen → 0.3.4
+          echo "Setting package.json version to $VERSION (from tag $TAG)"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
       # Python wird NICHT auf den Build-Agent installiert – es gibt keine
       # .venv im Installer. Python lädt initial.ps1/initial.sh beim ersten Start.
       # Lediglich für den TypeScript-Compile-Schritt wird Node benötigt.

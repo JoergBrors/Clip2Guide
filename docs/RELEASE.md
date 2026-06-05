@@ -48,11 +48,16 @@ Der Workflow besteht aus zwei Phasen: **Build** (Matrix) → **Publish**.
 
 1. `actions/checkout@v4`
 2. `actions/setup-node@v4` (Node.js 20)
-3. `actions/setup-python@v5` (Python 3.13) + `pip install -r requirements.txt`
-4. *(macOS only)* `iconutil -c icns icon/icon.iconset -o icon/icon.icns`
-5. `npm ci`
-6. `npx electron-builder --{platform} --{arch} --publish never`
-7. `actions/upload-artifact@v4` – Installer-Dateien hochladen
+3. **Version synchronisieren**: Tag `v0.3.4` → `npm version 0.3.4 --no-git-tag-version` → `package.json`
+4. `npm ci`
+5. `npm run build` (Vite + Electron TypeScript)
+6. *(macOS only)* Icon erzeugen + Ad-hoc Signierung vor und nach dem Packaging
+7. `npx electron-builder --{platform} --{arch} --publish never`
+8. `actions/upload-artifact@v4` – Installer-Dateien hochladen
+
+> **Versions-Synchronisation**: `package.json` muss vor einem Release-Tag **nicht** manuell
+> angepasst werden. Der CI-Schritt überschreibt die Version automatisch aus dem Tag.
+> `--no-git-tag-version` verhindert einen zweiten Commit/Tag durch npm.
 
 #### Phase 2: Publish
 
@@ -81,18 +86,18 @@ Schritte:
 ### Schritt-für-Schritt
 
 ```powershell
-# 1. Version in package.json anpassen (manuell editieren)
-#    "version": "0.2.0"
-
-# 2. Commit auf main pushen
-git add package.json
-git commit -m "chore: bump version to 0.2.0"
+# 1. Änderungen committen und pushen
 git push origin main
 
-# 3. Tag erstellen und pushen → löst den Workflow aus
-git tag v0.2.0
-git push origin v0.2.0
+# 2. Tag erstellen und pushen → löst den Workflow aus
+#    Der CI synchronisiert package.json automatisch auf diese Version.
+git tag v0.4.0
+git push origin v0.4.0
 ```
+
+> `package.json` muss **nicht** vorab manuell angepasst werden.
+> Der CI-Schritt „Sync version from tag to package.json" setzt die Version
+> automatisch auf den Tag-Wert (ohne `v`-Präfix).
 
 ### Was dann passiert
 
