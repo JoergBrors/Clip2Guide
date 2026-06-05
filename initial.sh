@@ -198,7 +198,21 @@ if [[ "$SKIP_PYTHON" == "false" ]]; then
   fi
 
   echo "Installiere Python-Module aus $REQUIREMENTS_PATH..."
-  python -m pip install --upgrade -r "$REQUIREMENTS_PATH"
+  if ! python -m pip install --upgrade -r "$REQUIREMENTS_PATH"; then
+    fail "pip install -r requirements.txt fehlgeschlagen"
+  fi
+
+  # Kritische Module explizit prüfen
+  MISSING_MODS=()
+  for mod in fastapi uvicorn pydantic cv2 moviepy PIL docx; do
+    if ! python -c "import $mod" 2>/dev/null; then
+      MISSING_MODS+=("$mod")
+    fi
+  done
+  if [[ ${#MISSING_MODS[@]} -gt 0 ]]; then
+    fail "Folgende Python-Module fehlen nach pip install: ${MISSING_MODS[*]}"
+  fi
+  ok "Alle Kern-Python-Module vorhanden"
 fi
 
 # ── FFmpeg (evermeet.cx statische Binaries) ────────────────────────────────────
@@ -341,7 +355,7 @@ section "Selbsttest"
 if [[ "$SKIP_PYTHON" == "false" ]]; then
   echo "Python-Module..."
   source "$VENV_PATH/bin/activate"
-  if python -c "import fastapi, pydantic, cv2, moviepy, PIL, dotenv; print('[OK] Kernmodule geladen'); print(f'     MoviePy {moviepy.__version__}  |  Pillow {PIL.__version__}')"; then
+  if python -c "import fastapi, pydantic, cv2, moviepy, PIL, dotenv, docx; print('[OK] Kernmodule geladen'); print(f'     MoviePy {moviepy.__version__}  |  Pillow {PIL.__version__}')"; then
     : # ok printed inline
   else
     fail "Python-Modultest fehlgeschlagen"
