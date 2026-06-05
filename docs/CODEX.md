@@ -578,6 +578,12 @@ USER_LOCAL_DIR: string
 
 ## 13. Konventionen für Code-Änderungen
 
+### Dokumentationspflicht
+
+- Jede Code-Änderung muss eine passende Aktualisierung von `docs/CODEX.md` enthalten.
+- Die Aktualisierung muss die geänderten Dateien, neuen oder geänderten Signaturen, Endpunkte, Datenmodelle, Konfigurationswerte und relevanten Arbeitsmuster so dokumentieren, dass spätere Agenten die Änderung nachvollziehen und darauf zurückgreifen können.
+- Wenn eine Änderung zusätzlich öffentliche API, Architektur, Konfiguration, Entwicklung oder Release-Prozess betrifft, müssen auch die passenden Dokumente unter `docs/` aktualisiert werden.
+
 ### Python (Backend)
 
 - Alle Dateien beginnen mit `"""Modulbeschreibung."""` + `from __future__ import annotations`
