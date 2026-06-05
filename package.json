@@ -1,6 +1,6 @@
 {
   "name": "clip2guide",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "Clip2Guide – automatische Tutorial-Erstellung aus Bildschirmaufnahmen",
   "main": "dist/electron/main.js",
