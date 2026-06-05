@@ -38,7 +38,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
 
   // Lokale Reihenfolge pro Szene (per Drag & Drop umsortierbar)
   const [localSceneFrames, setLocalSceneFrames] = useState<Map<number, FrameInfo[]>>(new Map());
-  // Frame-Editor (Blur / Verpixeln / Schwärzen)
+      // Frame-Editor (Rotation, Zielformat, Blur / Verpixeln / Schwärzen)
   const [editingFrame, setEditingFrame] = useState<FrameInfo | null>(null);
   const [frameEditError, setFrameEditError] = useState<string | null>(null);
   // Drag-Zustand für das Szenenraster
@@ -955,7 +955,7 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
                         {/* Bearbeiten-Button (immer sichtbar, unten links) */}
                         <div
                           onClick={(e) => { e.stopPropagation(); setEditingFrame(f); }}
-                          title="Frame bearbeiten (Blur / Verpixeln / Schwärzen)"
+                          title="Frame bearbeiten (rotieren, Zielformat, Blur / Verpixeln / Schwärzen)"
                           style={{
                             position: "absolute",
                             bottom: 2,

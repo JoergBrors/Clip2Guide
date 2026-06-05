@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 
 type EditMode = "blur" | "pixelate" | "black";
+type FitMode = "crop" | "fit" | "stretch";
 
 interface EditRegion {
   x: number;
@@ -28,7 +29,7 @@ function normalizeRect(r: { x: number; y: number; w: number; h: number }): { ax:
 /** Pixelierungseffekt auf einen Bereich des Canvas anwenden. scale=1 fuer Offscreen-Canvas. */
 function applyPixelate(
   ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
+  source: CanvasImageSource,
   ax: number, ay: number, aw: number, ah: number,
   pixelSize: number,
   scale: number,
@@ -38,7 +39,7 @@ function applyPixelate(
   tiny.width = Math.max(1, Math.round(aw / pixelSize));
   tiny.height = Math.max(1, Math.round(ah / pixelSize));
   const tCtx = tiny.getContext("2d")!;
-  tCtx.drawImage(img, ax, ay, aw, ah, 0, 0, tiny.width, tiny.height);
+  tCtx.drawImage(source, ax, ay, aw, ah, 0, 0, tiny.width, tiny.height);
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(tiny, 0, 0, tiny.width, tiny.height, ax * scale, ay * scale, aw * scale, ah * scale);
@@ -56,11 +57,67 @@ export default function FrameEditor({ imageSrc, onSave, onClose }: Props): React
   const [mode, setMode] = useState<EditMode>("blur");
   const [blurAmount, setBlurAmount] = useState(14);
   const [pixelSize, setPixelSize] = useState(12);
+  const [rotation, setRotation] = useState(0);
+  const [targetW, setTargetW] = useState(1920);
+  const [targetH, setTargetH] = useState(1080);
+  const [fitMode, setFitMode] = useState<FitMode>("crop");
+  const [sourceSize, setSourceSize] = useState<{ w: number; h: number } | null>(null);
   const [drawing, setDrawing] = useState(false);
   const [liveRect, setLiveRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   const CANVAS_MAX_W = 780;
+
+  const presets = [
+    { label: "Quelle", w: sourceSize?.w ?? 1920, h: sourceSize?.h ?? 1080 },
+    { label: "16:9", w: 1920, h: 1080 },
+    { label: "16:3", w: 1920, h: 360 },
+    { label: "4:3", w: 1440, h: 1080 },
+    { label: "1:1", w: 1080, h: 1080 },
+  ];
+
+  function normalizedRotation(value: number): number {
+    return ((value % 360) + 360) % 360;
+  }
+
+  function renderBaseImage(width: number, height: number): HTMLCanvasElement | null {
+    const img = imgRef.current;
+    if (!img) return null;
+    const out = document.createElement("canvas");
+    out.width = Math.max(1, Math.round(width));
+    out.height = Math.max(1, Math.round(height));
+    const outCtx = out.getContext("2d");
+    if (!outCtx) return null;
+    outCtx.fillStyle = "#000000";
+    outCtx.fillRect(0, 0, out.width, out.height);
+
+    const rot = normalizedRotation(rotation);
+    const rotatedW = rot === 90 || rot === 270 ? img.naturalHeight : img.naturalWidth;
+    const rotatedH = rot === 90 || rot === 270 ? img.naturalWidth : img.naturalHeight;
+    const scale = fitMode === "stretch"
+      ? { x: out.width / rotatedW, y: out.height / rotatedH }
+      : (() => {
+          const ratio = fitMode === "fit"
+            ? Math.min(out.width / rotatedW, out.height / rotatedH)
+            : Math.max(out.width / rotatedW, out.height / rotatedH);
+          return { x: ratio, y: ratio };
+        })();
+    const drawW = rotatedW * scale.x;
+    const drawH = rotatedH * scale.y;
+
+    outCtx.save();
+    outCtx.translate(out.width / 2, out.height / 2);
+    outCtx.scale(scale.x, scale.y);
+    outCtx.rotate(rot * Math.PI / 180);
+    outCtx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+    outCtx.restore();
+
+    if (fitMode !== "fit" && fitMode !== "stretch") {
+      void drawW;
+      void drawH;
+    }
+    return out;
+  }
 
   // Bild laden und Canvas initialisieren
   useEffect(() => {
@@ -71,12 +128,19 @@ export default function FrameEditor({ imageSrc, onSave, onClose }: Props): React
     }
     img.onload = () => {
       imgRef.current = img;
-      const scale = Math.min(1, CANVAS_MAX_W / img.naturalWidth);
+      const initialW = img.naturalWidth;
+      const initialH = img.naturalHeight;
+      setSourceSize({ w: initialW, h: initialH });
+      setTargetW(initialW);
+      setTargetH(initialH);
+      setRotation(0);
+      setRegions([]);
+      const scale = Math.min(1, CANVAS_MAX_W / initialW);
       scaleRef.current = scale;
       const canvas = canvasRef.current;
       if (canvas) {
-        canvas.width = Math.round(img.naturalWidth * scale);
-        canvas.height = Math.round(img.naturalHeight * scale);
+        canvas.width = Math.round(initialW * scale);
+        canvas.height = Math.round(initialH * scale);
       }
       setLoaded(true);
     };
@@ -90,14 +154,21 @@ export default function FrameEditor({ imageSrc, onSave, onClose }: Props): React
     if (!canvas || !img || !loaded) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const scale = scaleRef.current;
-    const cw = canvas.width;
-    const ch = canvas.height;
+    const outW = Math.max(1, targetW);
+    const outH = Math.max(1, targetH);
+    const scale = Math.min(1, CANVAS_MAX_W / outW);
+    scaleRef.current = scale;
+    const cw = Math.round(outW * scale);
+    const ch = Math.round(outH * scale);
+    if (canvas.width !== cw) canvas.width = cw;
+    if (canvas.height !== ch) canvas.height = ch;
+    const base = renderBaseImage(outW, outH);
+    if (!base) return;
 
     // 1. Basisbild
     ctx.filter = "none";
     ctx.clearRect(0, 0, cw, ch);
-    ctx.drawImage(img, 0, 0, cw, ch);
+    ctx.drawImage(base, 0, 0, cw, ch);
 
     // 2. Bereiche anwenden
     for (const r of regions) {
@@ -109,14 +180,14 @@ export default function FrameEditor({ imageSrc, onSave, onClose }: Props): React
         ctx.rect(ax * scale, ay * scale, aw * scale, ah * scale);
         ctx.clip();
         ctx.filter = `blur(${blurAmount}px)`;
-        ctx.drawImage(img, 0, 0, cw, ch);
+        ctx.drawImage(base, 0, 0, cw, ch);
         ctx.restore();
         ctx.filter = "none";
         ctx.strokeStyle = "rgba(239,83,80,0.85)";
         ctx.lineWidth = 1.5;
         ctx.strokeRect(ax * scale, ay * scale, aw * scale, ah * scale);
       } else if (r.type === "pixelate") {
-        applyPixelate(ctx, img, ax, ay, aw, ah, pixelSize, scale);
+        applyPixelate(ctx, base, ax, ay, aw, ah, pixelSize, scale);
         ctx.filter = "none";
         ctx.strokeStyle = "rgba(255,152,0,0.85)";
         ctx.lineWidth = 1.5;
@@ -142,7 +213,7 @@ export default function FrameEditor({ imageSrc, onSave, onClose }: Props): React
       ctx.strokeRect(ax * scale, ay * scale, aw * scale, ah * scale);
       ctx.setLineDash([]);
     }
-  }, [regions, liveRect, blurAmount, pixelSize, loaded, mode]);
+  }, [regions, liveRect, blurAmount, pixelSize, loaded, mode, rotation, targetW, targetH, fitMode]);
 
   function getCanvasPos(e: React.MouseEvent<HTMLCanvasElement>): { x: number; y: number } {
     const canvas = canvasRef.current!;
@@ -189,12 +260,14 @@ export default function FrameEditor({ imageSrc, onSave, onClose }: Props): React
     const img = imgRef.current;
     if (!img) return;
     // In voller natuerlicher Aufloesung rendern
+    const base = renderBaseImage(targetW, targetH);
+    if (!base) return;
     const offscreen = document.createElement("canvas");
-    offscreen.width = img.naturalWidth;
-    offscreen.height = img.naturalHeight;
+    offscreen.width = Math.max(1, targetW);
+    offscreen.height = Math.max(1, targetH);
     const ctx = offscreen.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(img, 0, 0);
+    ctx.drawImage(base, 0, 0);
     for (const r of regions) {
       const { ax, ay, aw, ah } = normalizeRect(r);
       if (aw < 1 || ah < 1) continue;
@@ -204,11 +277,11 @@ export default function FrameEditor({ imageSrc, onSave, onClose }: Props): React
         ctx.rect(ax, ay, aw, ah);
         ctx.clip();
         ctx.filter = `blur(${blurAmount}px)`;
-        ctx.drawImage(img, 0, 0);
+        ctx.drawImage(base, 0, 0);
         ctx.restore();
         ctx.filter = "none";
       } else if (r.type === "pixelate") {
-        applyPixelate(ctx, img, ax, ay, aw, ah, pixelSize, 1);
+        applyPixelate(ctx, base, ax, ay, aw, ah, pixelSize, 1);
       } else if (r.type === "black") {
         ctx.filter = "none";
         ctx.fillStyle = "#000000";
@@ -263,6 +336,50 @@ export default function FrameEditor({ imageSrc, onSave, onClose }: Props): React
           >
             ✕
           </button>
+        </div>
+
+        {/* Format / Rotation */}
+        <div style={{ display: "flex", gap: 10, marginBottom: 12, alignItems: "flex-end", flexWrap: "wrap", padding: "10px 12px", background: "#0d1324", border: "1px solid #24304e", borderRadius: 6 }}>
+          <div>
+            <label style={{ display: "block", color: "#90caf9", fontSize: 11, marginBottom: 3 }}>Rotation</label>
+            <div style={{ display: "flex", gap: 5 }}>
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: "3px 9px" }} onClick={() => setRotation((r) => normalizedRotation(r - 90))}>↶ 90°</button>
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: "3px 9px" }} onClick={() => setRotation((r) => normalizedRotation(r + 90))}>↷ 90°</button>
+              <button className="btn btn-ghost" style={{ fontSize: 12, padding: "3px 9px" }} onClick={() => setRotation(0)}>0°</button>
+            </div>
+          </div>
+          <div>
+            <label style={{ display: "block", color: "#90caf9", fontSize: 11, marginBottom: 3 }}>Breite</label>
+            <input type="number" min={1} max={7680} value={targetW} onChange={(e) => setTargetW(Math.max(1, Number(e.target.value) || 1))} style={{ width: 82, fontSize: 12 }} />
+          </div>
+          <span style={{ color: "#557", paddingBottom: 5 }}>×</span>
+          <div>
+            <label style={{ display: "block", color: "#90caf9", fontSize: 11, marginBottom: 3 }}>Hoehe</label>
+            <input type="number" min={1} max={4320} value={targetH} onChange={(e) => setTargetH(Math.max(1, Number(e.target.value) || 1))} style={{ width: 82, fontSize: 12 }} />
+          </div>
+          <div>
+            <label style={{ display: "block", color: "#90caf9", fontSize: 11, marginBottom: 3 }}>Modus</label>
+            <select value={fitMode} onChange={(e) => setFitMode(e.target.value as FitMode)} style={{ width: 145, fontSize: 12 }}>
+              <option value="crop">Zuschneiden</option>
+              <option value="fit">Einpassen</option>
+              <option value="stretch">Strecken</option>
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+            {presets.map((preset) => (
+              <button
+                key={preset.label}
+                className="btn btn-ghost"
+                style={{ fontSize: 11, padding: "3px 8px" }}
+                onClick={() => { setTargetW(preset.w); setTargetH(preset.h); }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <span style={{ color: "#65758c", fontSize: 11, marginLeft: "auto" }}>
+            {targetW}×{targetH} · {rotation}°
+          </span>
         </div>
 
         {/* Werkzeug-Auswahl */}
@@ -389,8 +506,7 @@ export default function FrameEditor({ imageSrc, onSave, onClose }: Props): React
           <button
             className="btn btn-primary"
             onClick={handleSave}
-            disabled={regions.length === 0}
-            title={regions.length === 0 ? "Zeichne zuerst einen Bereich" : ""}
+            title="Rotation, Format und Bereiche speichern"
           >
             Anwenden & Speichern
           </button>

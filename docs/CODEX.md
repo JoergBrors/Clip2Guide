@@ -666,6 +666,7 @@ USER_LOCAL_DIR: string
 - `SceneEditor` berechnet `duration_seconds` nach Text- und Bildaenderungen neu (`speaker_notes/body` grob 13 Zeichen/Sekunde, mindestens 2 Sekunden und mindestens 2 Sekunden je Bild).
 - `create_tutorial.py` normalisiert `render_hints.image_durations` vor dem MoviePy-Encoding so, dass die Summe der Bild-/Panel-Clips mindestens `actual_duration` der Szene abdeckt. Zu kurze KI-Hints werden proportional auf die Szenendauer skaliert, damit `CompositeVideoClip` nicht laenger ist als seine inneren Clips.
 - Nach dem Bearbeiten eines Frames ersetzt `handleFrameEditSave()` die lokale `dataUrl` in allen Szenen, im `frameStack` und in `customFrames`. Dadurch aktualisieren sich Entwurf, Raster, Carousel-Quellen und Auswahl-Vorschauen auch dann, wenn der Frame vorher in eine andere Szene verschoben wurde.
+- `frontend/src/components/FrameEditor.tsx` kann Frames zusaetzlich rotieren und auf ein Ziel-Frame-Format rendern. Unterstuetzt werden freie Zielgroessen sowie Presets wie Quelle, 16:9, 16:3, 4:3 und 1:1. Die Modi entsprechen Schritt 2 der Bild-Anpassung: Zuschneiden, Einpassen mit schwarzem Rand und Strecken. Rotation/Format werden zusammen mit Blur/Pixelate/Schwaerzen als neues JPEG gespeichert.
 - `skipNextFrameStackSyncRef` verhindert nach einem Frame-Edit, dass der `useEffect([frameStack])` die manuell bearbeitete `localSceneFrames`-Szenenstruktur wieder aus den urspruenglichen `scene_index`-Werten rekonstruiert. Nach echter Extraktion oder Upload synchronisiert der Effect weiterhin normal.
 - `finishWithCurrentScenes()` nutzt dieselben sortierten Szenengruppen fuer `onDone(selectedFrames, sceneGroups)`, die im Entwurf angezeigt werden. Dadurch ist die sichtbare Struktur vor `Weiter → Storyboard` identisch mit der Struktur, die an `SceneEditor` uebergeben wird.
 - Geaendert wurden `AnalyzeRequest`, `StoryboardDraftHints`, `api.analyzeVideo()`, `SceneEditor` und der Analyse-Prompt-Aufbau in `backend/app/routers/ai.py`; der bestehende Endpunkt `POST /api/videos/{video_id}/analyze` akzeptiert dadurch zusaetzlich `master_prompt`.
@@ -684,6 +685,12 @@ USER_LOCAL_DIR: string
 
 - `backend/app/main.py` nutzt einen FastAPI-`lifespan`-Handler und bereinigt beim Backend-Start `workspace/tmp/`. Dadurch werden alte temporaere ZIP-Exportfragmente und sonstige Laufzeitreste entfernt, ohne persistente Uploads, Frames, Storyboards oder Outputs anzutasten.
 - `frontend/electron/main.ts` leert nach `app.whenReady()` den Electron-Session-Cache, bevor Backend/Fenster gestartet werden. Dadurch werden alte Renderer-/HTTP-Cachefragmente beim App-Start entfernt.
+
+### Auto-Editor Decode-Pruefung
+
+- `backend/app/routers/processing.py` prueft vor dem Auto-Editor-Schnitt bei Videos mit Audio per FFmpeg, ob die erste Audiospur kurz decodierbar ist. Bei Decode-Problemen wird unter `workspace/tmp/auto-editor-input/{video_id}_ae_safe.mp4` eine Arbeitsdatei mit kopiertem Video und AAC-Audio erzeugt und fuer Auto-Editor genutzt.
+- Falls Auto-Editor trotz erfolgreicher Vorpruefung mit `Decoder not found` abbricht, wiederholt `_run_cut()` den Schnitt einmal automatisch mit einer AAC-kompatiblen Arbeitsdatei.
+- `backend/app/services/auto_editor_service.py` kuerzt Decoder-Fehler auf eine gezielte Diagnose, damit die UI nicht den kompletten Auto-Editor-Fortschrittsblock als Fehlermeldung anzeigen muss.
 
 ### Projektarchiv
 

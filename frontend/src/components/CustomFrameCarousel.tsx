@@ -140,7 +140,7 @@ export default function CustomFrameCarousel({ videoId, frames, onFramesChange, o
     }
   }
 
-  // ── Frame bearbeiten (Blur-Editor) ─────────────────────────────────────────
+  // ── Frame bearbeiten (Rotation / Format / Blur-Editor) ─────────────────────
 
   function handleSaveEdit(dataUrl: string) {
     if (editingFrame === null) return;
@@ -152,7 +152,7 @@ export default function CustomFrameCarousel({ videoId, frames, onFramesChange, o
 
   return (
     <div>
-      {/* Blur-Editor Modal */}
+      {/* Frame-Editor Modal */}
       {editingFrame !== null && (
         <FrameEditor
           imageSrc={frameSrc(frames[editingFrame])}
@@ -290,7 +290,7 @@ export default function CustomFrameCarousel({ videoId, frames, onFramesChange, o
         <button
           className="btn btn-ghost"
           onClick={() => setEditingFrame(safeIdx)}
-          title="Blur-Bereiche zeichnen, sensible Stellen unscharf machen"
+          title="Frame rotieren, Zielformat anpassen oder sensible Stellen bearbeiten"
           style={{ fontSize: 12, color: "#90caf9" }}
         >
           ✏ Bearbeiten

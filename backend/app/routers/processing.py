@@ -4,9 +4,11 @@ Router: Video-Verarbeitung (Normalisierung + Auto-Editor-Schnitt)
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import traceback
 import uuid
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from fastapi import APIRouter, BackgroundTasks
 
@@ -47,6 +49,83 @@ def _check_tool(path: Path, name: str) -> None:
             f"{name} nicht gefunden: {path}\n"
             f"Bitte sicherstellen dass das Tool vorhanden ist."
         )
+
+
+def _is_decoder_error(exc: Exception) -> bool:
+    return "decoder not found" in str(exc).lower()
+
+
+def _probe_audio_decode(input_path: Path) -> tuple[bool, str]:
+    """Prueft kurz, ob FFmpeg die erste Audiospur decodieren kann."""
+    cmd = [
+        str(settings.ffmpeg_path),
+        "-v", "error",
+        "-t", "1",
+        "-i", str(input_path),
+        "-map", "0:a:0",
+        "-f", "null",
+        "-",
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    if result.returncode == 0:
+        return True, output
+    if "stream map '0:a:0' matches no streams" in output.lower():
+        return True, "Keine Audiospur gefunden."
+    return False, output[-2000:]
+
+
+async def _make_auto_editor_safe_input(
+    input_path: Path,
+    video_id: str,
+    log_cb: Callable[[str], Awaitable[None]],
+) -> Path:
+    """Erstellt eine Auto-Editor-kompatible Arbeitsdatei mit AAC-Audio."""
+    safe_dir = settings.workspace_root / "tmp" / "auto-editor-input"
+    safe_dir.mkdir(parents=True, exist_ok=True)
+    safe_path = safe_dir / f"{video_id}_ae_safe.mp4"
+    cmd = [
+        str(settings.ffmpeg_path),
+        "-y",
+        "-i", str(input_path),
+        "-map", "0:v:0",
+        "-map", "0:a:0?",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ar", "44100",
+        "-movflags", "+faststart",
+        str(safe_path),
+    ]
+    await log_cb(f"[clip2guide] Erzeuge Auto-Editor-kompatible Arbeitsdatei: {safe_path}")
+    await log_cb(f"[clip2guide] ffmpeg: {' '.join(cmd)}")
+
+    loop = asyncio.get_running_loop()
+
+    def _run() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    result = await loop.run_in_executor(None, _run)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Audio-/Container-Kompatibilisierung fuer Auto-Editor fehlgeschlagen:\n"
+            + (result.stderr or result.stdout)[-2000:]
+        )
+    if not safe_path.exists():
+        raise RuntimeError(f"FFmpeg erzeugte keine Arbeitsdatei: {safe_path}")
+    return safe_path
 
 
 # ── Normalisierung ────────────────────────────────────────────────────────────
@@ -154,9 +233,34 @@ async def _run_cut(video_id: str, job_id: str, req: ProcessingRequest) -> None:
         async def on_ae_log(line: str) -> None:
             await _send(job_id, "log", "cut", line)
 
-        await _auto_editor.cut_video_async(
-            input_path, out_path, edit_expr, req.margin, req.has_audio, log_cb=on_ae_log
-        )
+        if req.has_audio:
+            await _send(job_id, "progress", "cut", "Pruefe Audio-Decoder...", 22)
+            decode_ok, decode_message = _probe_audio_decode(input_path)
+            if decode_ok:
+                await _send(job_id, "log", "cut", "[clip2guide] Audio-Decode-Pruefung: OK")
+            else:
+                await _send(job_id, "log", "cut", f"[clip2guide] Audio-Decode-Pruefung: FEHLER\n{decode_message}")
+                input_path = await _make_auto_editor_safe_input(input_path, video_id, on_ae_log)
+                await _send(job_id, "log", "cut", f"[clip2guide] Auto-Editor-Eingabe angepasst: {input_path}")
+
+        try:
+            await _auto_editor.cut_video_async(
+                input_path, out_path, edit_expr, req.margin, req.has_audio, log_cb=on_ae_log
+            )
+        except Exception as exc:
+            if not req.has_audio or not _is_decoder_error(exc):
+                raise
+            await _send(
+                job_id,
+                "log",
+                "cut",
+                "[clip2guide] Auto-Editor meldet 'Decoder not found'. "
+                "Erstelle AAC-kompatible Arbeitsdatei und wiederhole den Schnitt.",
+            )
+            safe_input = await _make_auto_editor_safe_input(input_path, video_id, on_ae_log)
+            await _auto_editor.cut_video_async(
+                safe_input, out_path, edit_expr, req.margin, req.has_audio, log_cb=on_ae_log
+            )
 
         await _send(job_id, "completed", "cut", "Schnitt abgeschlossen.", 100,
                     {"cut_path": str(out_path)})

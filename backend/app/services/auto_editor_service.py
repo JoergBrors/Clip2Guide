@@ -14,6 +14,16 @@ LogCallback = Callable[[str], Awaitable[None]]
 
 
 class AutoEditorService:
+    def _format_failure(self, returncode: int, lines: list[str] | str) -> str:
+        text = "\n".join(lines) if isinstance(lines, list) else lines
+        if "decoder not found" in text.lower():
+            return (
+                f"Auto-Editor fehlgeschlagen (Code {returncode}): Decoder not found. "
+                "Die Eingabedatei nutzt vermutlich einen Audio-/Container-Codec, den Auto-Editor "
+                "nicht direkt decodieren kann."
+            )
+        tail = text[-2000:] if isinstance(text, str) else ""
+        return f"Auto-Editor fehlgeschlagen (Code {returncode}):\n{tail}"
 
     def cut_video(
         self,
@@ -57,10 +67,7 @@ class AutoEditorService:
         )
 
         if result.returncode != 0:
-            raise RuntimeError(
-                f"Auto-Editor fehlgeschlagen (Code {result.returncode}):\n"
-                f"{result.stderr[-2000:]}"
-            )
+            raise RuntimeError(self._format_failure(result.returncode, result.stderr))
 
         if not output_file.exists():
             raise RuntimeError(f"Auto-Editor erzeugte keine Ausgabedatei: {output_file}")
@@ -132,10 +139,7 @@ class AutoEditorService:
         returncode = await future
 
         if returncode != 0:
-            raise RuntimeError(
-                f"Auto-Editor fehlgeschlagen (Code {returncode}):\n"
-                + "\n".join(log_lines[-50:])
-            )
+            raise RuntimeError(self._format_failure(returncode, log_lines))
         if not output_file.exists():
             raise RuntimeError(f"Auto-Editor erzeugte keine Ausgabedatei: {output_file}")
         return output_file
