@@ -1,7 +1,8 @@
 import { app, BrowserWindow, ipcMain, session, shell } from "electron";
-import { spawn, ChildProcess } from "child_process";
+import { spawn, spawnSync, ChildProcess } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import * as crypto from "crypto";
 
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 const BACKEND_PORT = 8787;
@@ -31,6 +32,69 @@ export const USER_LOCAL_DIR: string = (() => {
 
 let mainWindow: BrowserWindow | null = null;
 let backendProcess: ChildProcess | null = null;
+
+// ── Requirements-Check beim Start ────────────────────────────────────────────
+
+/**
+ * Prüft ob requirements.txt seit dem letzten pip install verändert wurde.
+ * Wenn ja (oder Hash-Datei fehlt), führt pip install --upgrade -r ... aus.
+ * Läuft synchron damit das Backend erst nach erfolgter Prüfung startet.
+ */
+function ensureRequirements(): void {
+  const isWindows = process.platform === "win32";
+  const venvPython = path.join(
+    USER_LOCAL_DIR, "backend", ".venv",
+    isWindows ? "Scripts\\python.exe" : "bin/python"
+  );
+
+  if (!fs.existsSync(venvPython)) {
+    console.log("[requirements] venv nicht gefunden – Prüfung übersprungen");
+    return;
+  }
+
+  // requirements.txt: im paketierten Modus in resources/, im Dev in backend/
+  const resourcesRoot = app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "../../..");
+  const reqCandidates = [
+    path.join(resourcesRoot, "backend", "requirements.txt"),
+    path.join(USER_LOCAL_DIR, "backend", "requirements.txt"),
+  ];
+  const reqPath = reqCandidates.find((p) => fs.existsSync(p));
+  if (!reqPath) {
+    console.warn("[requirements] requirements.txt nicht gefunden – Prüfung übersprungen");
+    return;
+  }
+
+  // SHA256 der requirements.txt berechnen
+  const reqContent = fs.readFileSync(reqPath);
+  const currentHash = crypto.createHash("sha256").update(reqContent).digest("hex");
+
+  const hashFile = path.join(USER_LOCAL_DIR, "backend", ".venv", ".requirements_hash");
+  let storedHash = "";
+  try { storedHash = fs.readFileSync(hashFile, "utf8").trim(); } catch { /* kein Hash */ }
+
+  if (currentHash === storedHash) {
+    console.log("[requirements] requirements.txt unverändert – pip install übersprungen");
+    return;
+  }
+
+  console.log("[requirements] requirements.txt geändert oder Erststart – installiere Module...");
+  console.log(`[requirements] requirements.txt: ${reqPath}`);
+
+  const pipArgs = ["-m", "pip", "install", "--upgrade", "-r", reqPath];
+  const result = spawnSync(venvPython, pipArgs, {
+    stdio: "inherit",
+    encoding: "utf8",
+    timeout: 5 * 60 * 1000,  // 5 Minuten max.
+  });
+
+  if (result.status === 0) {
+    fs.writeFileSync(hashFile, currentHash, "utf8");
+    console.log("[requirements] Module erfolgreich installiert, Hash gespeichert");
+  } else {
+    console.error(`[requirements] pip install fehlgeschlagen (Exit-Code ${result.status})`);
+    // Kein harter Abbruch – Backend-Start versuchen, Fehler wird dort sichtbar
+  }
+}
 
 // ── Backend starten ──────────────────────────────────────────────────────────
 
@@ -169,10 +233,12 @@ app.whenReady().then(async () => {
     // Nach Setup-Abschluss: Wizard schließen, Backend starten, Hauptfenster öffnen
     ipcMain.once("setup:completed", () => {
       setupWin.close();
+      ensureRequirements();
       startBackend();
       setTimeout(() => createWindow(), 1500);
     });
   } else {
+    ensureRequirements();
     startBackend();
     // Kurz warten bis Backend bereit ist
     setTimeout(() => createWindow(), 1500);
