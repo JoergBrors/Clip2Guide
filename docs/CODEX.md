@@ -701,7 +701,9 @@ USER_LOCAL_DIR: string
 - Mindestversions-Check: Python < 3.10 bricht mit klarer Fehlermeldung ab (`TemporaryDirectory(ignore_cleanup_errors=True)` erfordert ≥ 3.10).
 - Architektur-Check: auf arm64-Macs muss das Python ebenfalls arm64 sein; bei x86_64 wird Homebrew-Binary unter `${BREW_PREFIX}/opt/python@3.13/bin/python3.13` gesucht.
 - Falsch-architekturierte venvs werden automatisch gelöscht und neu erstellt.
-- FFmpeg-Architektur-Check nach dem Download via `file`-Befehl.
+- **FFmpeg-Download architektur-explizit**: arm64 → `ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/` (garantiert native arm64-Builds); x86_64/Intel → `evermeet.cx` als Fallback. evermeet.cx wird auf Apple Silicon nicht mehr verwendet.
+- **FFmpeg-Architektur-Check hart**: Nach dem Download prüft `file` die Binary. Ist sie NICHT arm64, werden die Dateien sofort gelöscht und das Setup bricht mit Fehler ab. Bestehendes FFmpeg mit falscher Architektur wird ebenfalls erkannt → Dateien löschen, klare Neu-Ausführungs-Anweisung.
+- **DebugPanel**: zeigt bei x86_64-FFmpeg auf arm64-Mac einen `diagHint` mit dem genauen `rm -rf`-Befehl und Anweisung zum Neu-Ausführen des Setups.
 - `create_tutorial.py`: `TemporaryDirectory(ignore_cleanup_errors=True)` → `TemporaryDirectory()` (Parameter erst ab 3.10, Skript läuft jetzt auf ≥ 3.10).
 - **pip-Install-Absicherung** (beide Skripte): `pip install -r requirements.txt` wird mit Exit-Code-Prüfung ausgeführt; bei Fehler bricht das Setup sofort ab. Nach dem Install werden alle kritischen Module explizit importiert (`fastapi`, `uvicorn`, `pydantic`, `cv2`, `moviepy`, `PIL`, `docx`); fehlt eines, wird es namentlich gemeldet und das Setup bricht ab. Der abschließende Selbsttest prüft ebenfalls `docx`.
 

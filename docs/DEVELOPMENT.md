@@ -8,7 +8,7 @@
 | Node.js | 20 LTS | npm ist inbegriffen |
 | npm | 10+ | Kommt mit Node.js 20 |
 | Git | beliebig | Für Versionskontrolle |
-| FFmpeg | 7.x | Wird durch `initial.ps1` / `initial.sh` in `tools/ffmpeg/` installiert |
+| FFmpeg | 7.x arm64 | Wird durch `initial.sh` in `tools/ffmpeg/` installiert. macOS arm64: von `ffmpeg.martin-riedl.de` (native arm64). Windows: von GitHub BtbN-Builds. |
 | Auto-Editor | Windows-Binary | Wird durch `initial.ps1` in `tools/auto-editor/` installiert |
 
 > Auf macOS / Linux werden FFmpeg und Auto-Editor durch `initial.sh` heruntergeladen.
