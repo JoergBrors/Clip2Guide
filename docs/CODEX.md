@@ -718,13 +718,17 @@ USER_LOCAL_DIR: string
 - `backend/app/main.py` nutzt einen FastAPI-`lifespan`-Handler und bereinigt beim Backend-Start `workspace/tmp/`. Dadurch werden alte temporaere ZIP-Exportfragmente und sonstige Laufzeitreste entfernt, ohne persistente Uploads, Frames, Storyboards oder Outputs anzutasten.
 - `frontend/electron/main.ts` leert nach `app.whenReady()` den Electron-Session-Cache, bevor Backend/Fenster gestartet werden. Dadurch werden alte Renderer-/HTTP-Cachefragmente beim App-Start entfernt.
 
-### Requirements-Auto-Install beim App-Start
+### Requirements-Auto-Install beim App-Start (Update-Fenster)
 
-- `ensureRequirements()` in `frontend/electron/main.ts` läuft **synchron vor `startBackend()`** (und nach dem Setup-Wizard).
-- Ablauf: SHA256 von `requirements.txt` berechnen → vergleichen mit `backend/.venv/.requirements_hash` → bei Abweichung oder fehlendem Hash: `pip install --upgrade -r requirements.txt` via `spawnSync` → Hash aktualisieren.
+- `checkRequirementsHash()` in `main.ts` vergleicht SHA256 von `requirements.txt` mit `backend/.venv/.requirements_hash`.
+- Wenn Hash abweicht oder fehlt: **Update-Fenster** (`?update=1`) öffnet sich vor dem Hauptfenster.
+- `runPipInstall()` startet `pip install --upgrade -r requirements.txt` async und streamt jede Ausgabezeile als `"update:log"`-IPC-Event an den Renderer.
+- `UpdateWindow.tsx` zeigt animierten Fortschrittsbalken, scrollbares Konsolenlog (rote Fehlerzeilen, blaue `[requirements]`-Zeilen) und „Weiter →"-Button nach Abschluss.
+- Renderer sendet `"update:close"` → `main.ts` schließt Update-Fenster, startet Backend, öffnet Hauptfenster.
 - `requirements.txt` wird zuerst in `resources/backend/` (paketieter Betrieb) gesucht, dann in `USER_LOCAL_DIR/backend/` (Dev-Modus).
-- Neue Pakete in `requirements.txt` werden damit beim nächsten App-Start automatisch nachinstalliert, ohne manuellen Setup-Lauf.
-- Ein `pip install`-Fehler bricht den Start nicht hart ab — Fehlermeldung erscheint im Electron-Log, Backend-Start wird dennoch versucht.
+- Ein `pip install`-Fehler bricht den Start nicht hart ab — Benutzer sieht den Fehler im Update-Fenster und kann trotzdem fortfahren.
+- IPC-Kanäle: `update:log` (main→renderer), `update:done` (main→renderer), `update:close` (renderer→main).
+- `preload.ts`: `window.updateAPI` mit `onLog()`, `onDone()`, `close()`.
 
 ### Auto-Editor Decode-Pruefung
 
