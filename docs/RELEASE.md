@@ -72,7 +72,7 @@ Schritte:
 **GitHub Release enthält:**
 
 - `Clip2Guide Setup {version}.exe` (Windows x64 NSIS-Installer)
-- `Clip2Guide-{version}-arm64.dmg` (macOS arm64 / Apple Silicon DMG)
+- `Clip2Guide-{version}-arm64.pkg` (macOS arm64 / Apple Silicon PKG-Installer)
 
 ---
 
@@ -138,14 +138,16 @@ mac:
 
 ### Wichtige Hinweise zur macOS-Konfiguration
 
-- **`hardenedRuntime: false`**: Die App ist **nicht** von Apple signiert.
-  Benutzer müssen den ersten Start manuell freigeben (Systemeinstellungen →
-  Datenschutz & Sicherheit → „Trotzdem öffnen").
+- **Format: `pkg`** statt `dmg` – der macOS-Installer verarbeitet das PKG nativ und
+  umgeht das Quarantine-/Gatekeeper-„App ist beschädigt"-Problem.
+- **`artifactName`**: `Clip2Guide-${version}-arm64.pkg` – Version und Architektur
+  sind explizit im Dateinamen codiert.
+- **`hardenedRuntime: false`**: Die App ist **nicht** von Apple notarisiert.
+  Benutzer müssen beim ersten Start Rechtsklick → „Öffnen" verwenden.
 - **Kein Apple-Developer-Konto** / kein Notarisierungsprozess konfiguriert.
-- Die `arch`-Liste wurde **aus `electron-builder.yml` entfernt** – die Architektur
-  wird ausschließlich über das CLI-Flag `--arm64` im Workflow gesteuert.
-- **Ad-hoc Signierung** im CI verhindert die „App ist beschädigt"-Meldung:
-  `codesign --deep --force --sign -` nach dem electron-builder-Schritt.
+- Die Architektur wird ausschließlich über das CLI-Flag `--arm64` im Workflow gesteuert.
+- **Ad-hoc Signierung** im CI vor und nach dem Packaging:
+  `codesign --deep --force --sign -` auf die `.app`.
 
 ---
 
@@ -173,7 +175,7 @@ npm run build:dist
 | --- | --- | --- |
 | Leere GitHub Releases-Seite | Build-Job(s) sind fehlgeschlagen → `release`-Job startet nicht | Build-Fehler beheben, neuen Tag pushen |
 | Windows-NSIS signiert nicht | Kein Code-Signing-Zertifikat konfiguriert | SmartScreen-Warnung wird Benutzern angezeigt; akzeptabel für interne Tools |
-| macOS Gatekeeper blockiert App | `hardenedRuntime: false`, keine Notarisierung | Rechtsklick → „Öffnen"; bei „beschädigt"-Meldung: `xattr -cr /Applications/Clip2Guide.app` |
+| macOS Gatekeeper blockiert App | `hardenedRuntime: false`, keine Notarisierung | Rechtsklick auf PKG → „Öffnen" |
 | `icon.icns` fehlt beim macOS-Build | `icon.icns` ist nicht im Repo (wird im CI generiert) | CI-Schritt `iconutil -c icns icon/icon.iconset -o icon/icon.icns` ist im Workflow |
 
 ---

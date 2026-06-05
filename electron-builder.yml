@@ -31,9 +31,10 @@ asarUnpack:
   - "**/*.so"
   - "**/*.dylib"
 
-# Windows – NSIS-Installer
+# Windows – NSIS-Installer + Portable
 win:
   executableName: clip2guide
+  artifactName: "Clip2Guide-${version}-${arch}-${os}.${ext}"
   target:
     - target: nsis
       arch:
@@ -53,23 +54,16 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
 
-# macOS – DMG
+# macOS – PKG (kein DMG; PKG wird vom macOS-Installer verarbeitet und
+# umgeht das Quarantine-/Gatekeeper-"App ist beschädigt"-Problem)
 mac:
   target:
-    - target: dmg
+    - target: pkg
+  artifactName: "Clip2Guide-${version}-arm64.${ext}"
   category: public.app-category.productivity
   icon: frontend/public/icon.icns
-  # Ohne Apple-Developer-Zertifikat: notarize deaktivieren
-  # (User muss Rechtsklick → Öffnen verwenden)
   hardenedRuntime: false
   gatekeeperAssess: false
-
-dmg:
-  title: "Clip2Guide ${version}"
-  background: frontend/public/dmg-background.png
-  window:
-    width: 540
-    height: 380
 
 # Ausgabeverzeichnis
 directories:

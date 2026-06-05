@@ -72,6 +72,23 @@ jobs:
           PYEOF
           iconutil --convert icns /tmp/icon.iconset -o frontend/public/icon.icns
 
+      # Ad-hoc Signierung VOR dem Packaging: die .app wird direkt im Electron-
+      # Build-Ausgabeverzeichnis signiert, bevor electron-builder sie ins PKG packt.
+      # '-' = lokale Ad-hoc-Identität, kein Apple-Zertifikat nötig.
+      # Verhindert die Gatekeeper-Meldung "App ist beschädigt".
+      - name: Ad-hoc sign app before packaging (macOS)
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          # electron legt die .app unter dist/mac-arm64/ ab (vor dem electron-builder-Lauf)
+          APP=$(find dist -maxdepth 2 -name "*.app" | head -1)
+          if [ -n "$APP" ]; then
+            echo "Pre-signing: $APP"
+            codesign --deep --force --sign - "$APP"
+          else
+            echo "No .app found yet – signing will happen after build step"
+          fi
+
       - name: Package with electron-builder
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -79,18 +96,18 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
 
-      # Ad-hoc Signierung: verhindert die macOS-Meldung "App ist beschädigt".
-      # '-' = lokale Ad-hoc-Identität, kein Apple-Zertifikat nötig.
-      # Zeigt beim ersten Start nur noch "unbekannter Entwickler" → Rechtsklick → Öffnen.
-      - name: Ad-hoc sign app (macOS)
+      # Post-build Signierung: .app aus dem release-Verzeichnis nochmals signieren
+      # und Quarantine-Attribute aus dem PKG entfernen.
+      - name: Ad-hoc sign & strip quarantine (macOS)
         if: matrix.platform == 'mac'
         shell: bash
         run: |
-          APP=$(find dist/release/mac* -name "*.app" -maxdepth 2 | head -1)
-          echo "Signing: $APP"
-          codesign --deep --force --sign - "$APP"
-          # Quarantine-Attribut aus DMG und allen enthaltenen Dateien entfernen
-          find dist/release -name "*.dmg" -exec xattr -cr {} \;
+          APP=$(find dist/release -name "*.app" -maxdepth 3 | head -1)
+          if [ -n "$APP" ]; then
+            echo "Post-signing: $APP"
+            codesign --deep --force --sign - "$APP"
+          fi
+          find dist/release -name "*.pkg" -exec xattr -cr {} \;
 
       - name: List release artifacts
         shell: bash
@@ -102,7 +119,7 @@ jobs:
           name: installer-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             dist/release/*.exe
-            dist/release/*.dmg
+            dist/release/*.pkg
           if-no-files-found: warn
 
   release:
@@ -133,7 +150,7 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          artifacts: "artifacts/win/*.exe,artifacts/mac/*.dmg"
+          artifacts: "artifacts/win/*.exe,artifacts/mac/*.pkg"
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           generateReleaseNotes: true
@@ -148,11 +165,10 @@ jobs:
               direkt starten – keine Installation notwendig.
               Beim ersten Start startet automatisch ein Setup-Wizard, der Python, FFmpeg und
               Auto-Editor herunterlädt. Danach AI-Provider und API-Key eintragen.
-            - **macOS**: `Clip2Guide-*.dmg` herunterladen, mounten und in Applications ziehen.
-              **Hinweis**: Da kein Apple-Entwicklerzertifikat verwendet wird, erscheint beim
-              ersten Start eine Gatekeeper-Warnung → **Rechtsklick auf die App → „Öffnen"**.
-              Falls macOS die App als „beschädigt" meldet:
-              `xattr -cr /Applications/Clip2Guide.app` im Terminal ausführen.
+            - **macOS**: `Clip2Guide-*-arm64.pkg` herunterladen und doppelklicken.
+              Der macOS-Installer führt durch die Installation.
+              **Hinweis**: Da kein Apple-Entwicklerzertifikat verwendet wird, erscheint
+              beim ersten Öffnen eine Gatekeeper-Warnung → **Rechtsklick → „Öffnen"**.
 
             ### API-Keys
             API-Keys werden **nicht** im Installer gespeichert. Du trägst sie beim ersten Start
