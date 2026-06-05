@@ -89,7 +89,7 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
   },
 ];
 
-export default function SettingsPanel({ onClose }: { onClose: () => void }): React.ReactElement {
+export default function SettingsPanel({ onClose, onOpenDebug }: { onClose: () => void; onOpenDebug?: () => void }): React.ReactElement {
   const [values, setValues] = useState<Record<string, string>>({});
   const [activeProviders, setActiveProviders] = useState<Set<string>>(new Set(["gemini"]));
   const [loading, setLoading] = useState(true);
@@ -221,6 +221,9 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }): Rea
 
         <div style={s.footer}>
           {saved && <span style={s.savedMsg}>✓ Gespeichert</span>}
+          <button style={s.debugBtn} onClick={onOpenDebug} title="Debug & Diagnose öffnen">
+            🔧 Debug
+          </button>
           <button style={s.cancelBtn} onClick={onClose}>Schließen</button>
           <button
             style={{ ...s.saveBtn, ...(saving ? s.saveBtnDisabled : {}) }}
@@ -372,6 +375,16 @@ const s: Record<string, React.CSSProperties> = {
   },
   savedMsg: {
     color: "#81c784",
+    fontSize: 13,
+    marginRight: "auto",
+  },
+  debugBtn: {
+    background: "transparent",
+    border: "1px solid #5d4000",
+    color: "#ffb74d",
+    padding: "7px 14px",
+    borderRadius: 6,
+    cursor: "pointer",
     fontSize: 13,
     marginRight: "auto",
   },

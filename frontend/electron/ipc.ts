@@ -1,5 +1,6 @@
-import { IpcMain, dialog, shell, app } from "electron";
-import { spawn } from "child_process";
+import { IpcMain, dialog, shell, app, session } from "electron";
+import { spawn, execFile } from "child_process";
+import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
 import { USER_ENV_FILE, USER_LOCAL_DIR } from "./main";
@@ -179,5 +180,166 @@ export function registerAll(ipcMain: IpcMain): void {
 
     app.quit();
     return { confirmed: true };
+  });
+
+  // ── Debug-Panel IPC ─────────────────────────────────────────────────────────
+
+  /** Sammelt Systeminfos: Plattform, Architektur, Pfade, Backend-Status, venv. */
+  ipcMain.handle("debug:info", async () => {
+    const isWindows = process.platform === "win32";
+    const venvPython = path.join(
+      USER_LOCAL_DIR, "backend", ".venv",
+      isWindows ? "Scripts\\python.exe" : "bin/python"
+    );
+    const backendCwd = app.isPackaged
+      ? path.join(process.resourcesPath, "app.asar.unpacked", "backend")
+      : path.join(USER_LOCAL_DIR, "backend");
+    const workspaceTmp = path.join(USER_LOCAL_DIR, "workspace", "tmp");
+
+    // Backend-Erreichbarkeit prüfen
+    let backendReachable = false;
+    let backendError = "";
+    try {
+      const res = await fetch("http://127.0.0.1:8787/health", { signal: AbortSignal.timeout(3000) });
+      backendReachable = res.ok;
+      if (!res.ok) backendError = `HTTP ${res.status}`;
+    } catch (e: unknown) {
+      backendError = e instanceof Error ? e.message : String(e);
+    }
+
+    // Python-Architektur auslesen (nur wenn venv existiert)
+    let pythonArch = "n/a";
+    let pythonVersion = "n/a";
+    if (fs.existsSync(venvPython)) {
+      pythonArch = await new Promise<string>((resolve) => {
+        execFile(venvPython, ["-c", "import platform; print(platform.machine())"],
+          { timeout: 5000 }, (err, stdout) => resolve(err ? "error" : stdout.trim()));
+      });
+      pythonVersion = await new Promise<string>((resolve) => {
+        execFile(venvPython, ["--version"],
+          { timeout: 5000 }, (err, stdout, stderr) => resolve(err ? "error" : (stdout || stderr).trim()));
+      });
+    }
+
+    // FFmpeg-Architektur
+    const ffmpegExe = path.join(USER_LOCAL_DIR, "tools", "ffmpeg", "bin",
+      isWindows ? "ffmpeg.exe" : "ffmpeg");
+    let ffmpegArch = "n/a";
+    if (fs.existsSync(ffmpegExe) && !isWindows) {
+      ffmpegArch = await new Promise<string>((resolve) => {
+        execFile("file", [ffmpegExe], { timeout: 5000 },
+          (err, stdout) => resolve(err ? "error" : stdout.trim()));
+      });
+    } else if (fs.existsSync(ffmpegExe)) {
+      ffmpegArch = "vorhanden (Windows)";
+    }
+
+    // Workspace-Verzeichnisse
+    const wsRoot = path.join(USER_LOCAL_DIR, "workspace");
+    const wsDirs = ["uploads", "normalized", "cut", "frames", "ai-output", "output", "tmp"];
+    const wsStatus: Record<string, string> = {};
+    for (const d of wsDirs) {
+      const p = path.join(wsRoot, d);
+      if (fs.existsSync(p)) {
+        try {
+          const count = fs.readdirSync(p).length;
+          wsStatus[d] = `${count} Einträge`;
+        } catch { wsStatus[d] = "Lesefehler"; }
+      } else {
+        wsStatus[d] = "fehlt";
+      }
+    }
+
+    // Log-Verzeichnis
+    const logDir = path.join(USER_LOCAL_DIR, "workspace", "logs");
+    let logFiles: string[] = [];
+    try { logFiles = fs.existsSync(logDir) ? fs.readdirSync(logDir).slice(-10) : []; } catch { /**/ }
+
+    return {
+      app: {
+        version: app.getVersion(),
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+        arch: process.arch,
+        osArch: os.arch(),
+        osPlatform: os.platform(),
+        osRelease: os.release(),
+        nodeVersion: process.versions.node,
+        electronVersion: process.versions.electron,
+      },
+      paths: {
+        userLocalDir: USER_LOCAL_DIR,
+        userEnvFile: USER_ENV_FILE,
+        envExists: fs.existsSync(USER_ENV_FILE),
+        venvPython,
+        venvExists: fs.existsSync(venvPython),
+        ffmpegExe,
+        ffmpegExists: fs.existsSync(ffmpegExe),
+        backendCwd,
+        workspaceTmp,
+        logDir,
+      },
+      python: {
+        version: pythonVersion,
+        arch: pythonArch,
+      },
+      ffmpeg: {
+        arch: ffmpegArch,
+      },
+      backend: {
+        reachable: backendReachable,
+        error: backendError,
+        url: "http://127.0.0.1:8787",
+      },
+      workspace: wsStatus,
+      logs: logFiles,
+    };
+  });
+
+  /** Leert Electron-Session-Cache und workspace/tmp. */
+  ipcMain.handle("debug:clear-cache", async () => {
+    const results: string[] = [];
+    try {
+      await session.defaultSession.clearCache();
+      results.push("Electron-Cache geleert");
+    } catch (e: unknown) {
+      results.push(`Electron-Cache Fehler: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    try {
+      await session.defaultSession.clearStorageData();
+      results.push("Electron-Storage geleert");
+    } catch (e: unknown) {
+      results.push(`Electron-Storage Fehler: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const tmpDir = path.join(USER_LOCAL_DIR, "workspace", "tmp");
+    if (fs.existsSync(tmpDir)) {
+      try {
+        const entries = fs.readdirSync(tmpDir);
+        for (const entry of entries) {
+          fs.rmSync(path.join(tmpDir, entry), { recursive: true, force: true });
+        }
+        results.push(`workspace/tmp geleert (${entries.length} Einträge)`);
+      } catch (e: unknown) {
+        results.push(`workspace/tmp Fehler: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    } else {
+      results.push("workspace/tmp nicht vorhanden");
+    }
+    return results;
+  });
+
+  /** Öffnet das Log-Verzeichnis im Finder / Explorer. */
+  ipcMain.handle("debug:open-log-dir", async () => {
+    const logDir = path.join(USER_LOCAL_DIR, "workspace", "logs");
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    await shell.openPath(logDir);
+  });
+
+  /** Öffnet die .env-Datei im Standard-Texteditor. */
+  ipcMain.handle("debug:open-env-file", async () => {
+    if (fs.existsSync(USER_ENV_FILE)) {
+      await shell.openPath(USER_ENV_FILE);
+    }
+    return fs.existsSync(USER_ENV_FILE);
   });
 }

@@ -49,7 +49,8 @@ Clip2Guide/
 │       │   ├── JsonPreview.tsx        # Rohes JSON anzeigen
 │       │   ├── ImageHoverZoom.tsx     # Zoom-Overlay
 │       │   ├── RenderPanel.tsx        # Schritt 5: Rendering
-│       │   └── SetupWizard.tsx        # Erststart-Einrichtung
+│       │   ├── SetupWizard.tsx        # Erststart-Einrichtung
+│       │   └── DebugPanel.tsx         # Debug & Diagnose (via SettingsPanel → 🔧 Debug)
 │       └── styles/
 │
 ├── backend/
@@ -561,6 +562,12 @@ complete(): void                                   // Kanal: "setup:completed" (
 
 // window.appAPI
 uninstall(deleteUserData: boolean): Promise<{confirmed: boolean}>  // Kanal: "app:uninstall"
+
+// window.debugAPI
+getInfo(): Promise<DebugInfo>        // Kanal: "debug:info" – Systeminfos, Backend-Status, Pfade, venv-Architektur
+clearCache(): Promise<string[]>      // Kanal: "debug:clear-cache" – Electron-Cache + workspace/tmp leeren
+openLogDir(): Promise<void>          // Kanal: "debug:open-log-dir" – Logs im Finder/Explorer öffnen
+openEnvFile(): Promise<boolean>      // Kanal: "debug:open-env-file" – .env im Texteditor öffnen
 ```
 
 **Pfad-Konstanten in `main.ts`:**

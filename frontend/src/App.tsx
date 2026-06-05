@@ -7,6 +7,7 @@ import SceneEditor from "./components/SceneEditor";
 import RenderPanel from "./components/RenderPanel";
 import SetupWizard from "./components/SetupWizard";
 import SettingsPanel from "./components/SettingsPanel";
+import DebugPanel from "./components/DebugPanel";
 import type { ImageInfo, StoryboardDraftHints } from "./api/backendClient";
 import { api } from "./api/backendClient";
 
@@ -45,6 +46,7 @@ export default function App(): React.ReactElement {
   const [sceneGroups, setSceneGroups] = useState<string[][] | null>(null);
   const [draftHints, setDraftHints] = useState<StoryboardDraftHints | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
 
   // Setup-Wizard: URL-Parameter ?setup=1 signalisiert, dass das Einrichtungsfenster aktiv ist.
   const isSetupMode = new URLSearchParams(window.location.search).get("setup") === "1";
@@ -163,7 +165,13 @@ export default function App(): React.ReactElement {
         </button>
       </header>
 
-      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsPanel
+          onClose={() => setSettingsOpen(false)}
+          onOpenDebug={() => { setSettingsOpen(false); setDebugOpen(true); }}
+        />
+      )}
+      {debugOpen && <DebugPanel onClose={() => setDebugOpen(false)} />}
 
       <main style={styles.main}>
         {step === "upload" && (

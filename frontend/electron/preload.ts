@@ -57,6 +57,18 @@ contextBridge.exposeInMainWorld("appAPI", {
     ipcRenderer.invoke("app:uninstall", deleteUserData),
 });
 
+/** Debug-API */
+contextBridge.exposeInMainWorld("debugAPI", {
+  getInfo: (): Promise<unknown> =>
+    ipcRenderer.invoke("debug:info"),
+  clearCache: (): Promise<string[]> =>
+    ipcRenderer.invoke("debug:clear-cache"),
+  openLogDir: (): Promise<void> =>
+    ipcRenderer.invoke("debug:open-log-dir"),
+  openEnvFile: (): Promise<boolean> =>
+    ipcRenderer.invoke("debug:open-env-file"),
+});
+
 export type Clip2GuideApi = {
   backendUrl: string;
   openPath: (filePath: string) => Promise<void>;
@@ -74,9 +86,17 @@ export type SetupApi = {
   complete: () => void;
 };
 
+export type DebugApi = {
+  getInfo: () => Promise<unknown>;
+  clearCache: () => Promise<string[]>;
+  openLogDir: () => Promise<void>;
+  openEnvFile: () => Promise<boolean>;
+};
+
 declare global {
   interface Window {
     clip2guide: Clip2GuideApi;
     setupAPI: SetupApi;
+    debugAPI?: DebugApi;
   }
 }
