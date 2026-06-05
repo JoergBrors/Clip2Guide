@@ -129,8 +129,9 @@ jobs:
         with:
           name: installer-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
-            dist/release/*.exe
-            dist/release/*.pkg
+            dist/release/Clip2Guide-Setup-win-x64.exe
+            dist/release/Clip2Guide-Portable-win-x64.exe
+            dist/release/Clip2Guide-mac-arm64.pkg
           if-no-files-found: warn
 
   release:
@@ -140,7 +141,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Download Windows installer
+      - name: Download Windows installers
         uses: actions/download-artifact@v4
         with:
           name: installer-win-x64
@@ -161,7 +162,7 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          artifacts: "artifacts/win/*.exe,artifacts/mac/*.pkg"
+          artifacts: "artifacts/win/Clip2Guide-Setup-win-x64.exe,artifacts/win/Clip2Guide-Portable-win-x64.exe,artifacts/mac/Clip2Guide-mac-arm64.pkg"
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           generateReleaseNotes: true
@@ -169,14 +170,14 @@ jobs:
             ## Clip2Guide ${{ github.ref_name }}
 
             ### Installation
-            - **Windows (Installer)**: `Clip2Guide.Setup.*.exe` herunterladen und ausführen.
+            - **Windows (Installer)**: `Clip2Guide-Setup-win-x64.exe` herunterladen und ausführen.
               Falls Windows Smart App Control den Installer blockiert (kein Dialog erscheint),
-              bitte die **Portable-Version** verwenden:
-            - **Windows (Portable)**: `Clip2Guide.*.exe` (ohne „Setup") herunterladen und
+              bitte die **Portable-Version** verwenden.
+            - **Windows (Portable)**: `Clip2Guide-Portable-win-x64.exe` herunterladen und
               direkt starten – keine Installation notwendig.
               Beim ersten Start startet automatisch ein Setup-Wizard, der Python, FFmpeg und
               Auto-Editor herunterlädt. Danach AI-Provider und API-Key eintragen.
-            - **macOS**: `Clip2Guide-*-arm64.pkg` herunterladen und doppelklicken.
+            - **macOS (Apple Silicon)**: `Clip2Guide-mac-arm64.pkg` herunterladen und doppelklicken.
               Der macOS-Installer führt durch die Installation.
               **Hinweis**: Da kein Apple-Entwicklerzertifikat verwendet wird, erscheint
               beim ersten Öffnen eine Gatekeeper-Warnung → **Rechtsklick → „Öffnen"**.
