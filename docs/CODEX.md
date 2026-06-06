@@ -4,7 +4,7 @@ Dieses Dokument ist der **vollständige, maschinenlesbare Kontext** für automat
 Code-Änderungen (OpenAI Codex, GitHub Copilot Agent, etc.).
 Es beschreibt Dateistruktur, genaue Signaturen, Konventionen und Muster.
 
-> Stand: 2026-06-06 · Basis-Branch: `main` · zuletzt geändert: 2026-06-06
+> Stand: 2026-06-06 · Basis-Branch: `main` · zuletzt geändert: 2026-06-06 · Version: 0.3.5
 
 ---
 
@@ -710,6 +710,8 @@ USER_LOCAL_DIR: string
 - **pip-Install-Absicherung** (beide Skripte): `pip install -r requirements.txt` wird mit Exit-Code-Prüfung ausgeführt; bei Fehler bricht das Setup sofort ab. Nach dem Install werden alle kritischen Module explizit importiert (`fastapi`, `uvicorn`, `pydantic`, `cv2`, `moviepy`, `PIL`, `docx`, `pillow_heif`); fehlt eines, wird es namentlich gemeldet und das Setup bricht ab. Der abschließende Selbsttest prüft ebenfalls `docx` und `pillow_heif`.
 - **Hash-basiertes Re-Install**: SHA256 der `requirements.txt` wird nach jedem erfolgreichen `pip install` in `backend/.venv/.requirements_hash` gespeichert. Beim nächsten Setup-Lauf wird der Hash verglichen – `pip install` wird nur ausgeführt wenn sich die Datei geändert hat oder die Hash-Datei fehlt. Neue Pakete werden dadurch beim nächsten App-Start automatisch nachinstalliert.
 - **Plattformabhängige Tool-Pfad-Defaults** (`config.py`): `ffmpeg_path`, `ffprobe_path` und `auto_editor_path` verwenden auf Windows `.exe`-Suffix, auf macOS/Linux keinen Suffix (`sys.platform == "win32"` Abfrage).
+- **`.env` Tool-Pfad-Korrektur** (`initial.sh`): Bei jedem Setup-Lauf werden `FFMPEG_PATH`, `FFPROBE_PATH` und `AUTO_EDITOR_PATH` in der `.env` auf korrekte macOS-Werte (kein `.exe`) gesetzt — auch wenn die `.env` bereits existiert und Windows-Defaults enthält (z.B. vom Setup-Wizard geschrieben). Verhindert `ffprobe.exe not found`-Fehler beim Video-Import auf macOS.
+- **`SetupWizard.tsx`**: `DEFAULT_ENV_KEYS` erkennt macOS via `navigator.platform` und schreibt direkt korrekte Tool-Pfade ohne `.exe`-Suffix.
 - **macOS Font-Fallback** (`create_tutorial.py`): `_load_font()` prüft zuerst macOS-Systemfonts (`/System/Library/Fonts/HelveticaNeue.ttc`, `Helvetica.ttc`, `/Library/Fonts/Arial.ttf`) vor Windows- und Linux-Pfaden. `ImageFont.load_default(size)` ersetzt den parameterlosen Aufruf (Pillow ≥ 10.1, liefert skalierbare Schrift).
 - **HEIC/HEIF-Import**: `pillow-heif` in `requirements.txt`; `images.py` registriert `pillow_heif.register_heif_opener()` beim Modulstart. HEIC/HEIF-Uploads werden nach dem Speichern via Pillow zu JPEG konvertiert; das Original wird gelöscht. Frontend akzeptiert `image/heic`, `image/heif`, `.heic`, `.heif`.
 
