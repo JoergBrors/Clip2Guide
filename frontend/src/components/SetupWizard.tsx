@@ -38,6 +38,9 @@ const PROVIDERS: Record<Provider, ProviderConfig> = {
   },
 };
 
+const _isMac = navigator.platform.toLowerCase().includes("mac") ||
+  (navigator as any).userAgentData?.platform?.toLowerCase() === "macos";
+
 const DEFAULT_ENV_KEYS: Record<string, string> = {
   AI_PROVIDER: "gemini",
   GEMINI_MODEL: "gemini-2.5-flash",
@@ -46,9 +49,11 @@ const DEFAULT_ENV_KEYS: Record<string, string> = {
   AZURE_OPENAI_API_VERSION: "2025-01-01-preview",
   AZURE_COGNITIVE_DEPLOYMENT: "gpt-5-mini",
   AZURE_COGNITIVE_API_VERSION: "2025-04-01-preview",
-  FFMPEG_PATH: "./tools/ffmpeg/bin/ffmpeg.exe",
-  FFPROBE_PATH: "./tools/ffmpeg/bin/ffprobe.exe",
-  AUTO_EDITOR_PATH: "./tools/auto-editor/auto-editor-windows-x86_64.exe",
+  FFMPEG_PATH: _isMac ? "./tools/ffmpeg/bin/ffmpeg" : "./tools/ffmpeg/bin/ffmpeg.exe",
+  FFPROBE_PATH: _isMac ? "./tools/ffmpeg/bin/ffprobe" : "./tools/ffmpeg/bin/ffprobe.exe",
+  AUTO_EDITOR_PATH: _isMac
+    ? "./tools/auto-editor/auto-editor-macos-arm64"
+    : "./tools/auto-editor/auto-editor-windows-x86_64.exe",
   WORKSPACE_ROOT: "./workspace",
   AI_RETRY_MAX_ATTEMPTS: "3",
   AI_RETRY_INITIAL_DELAY: "10",

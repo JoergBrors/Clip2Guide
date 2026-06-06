@@ -352,19 +352,29 @@ ENV_FILE="$ROOT/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   if [[ -n "$ENV_EXAMPLE" && -f "$ENV_EXAMPLE" ]]; then
     cp "$ENV_EXAMPLE" "$ENV_FILE"
-    # Pfade fuer macOS anpassen (kein .exe)
-    sed -i '' \
-      "s|FFMPEG_PATH=.*|FFMPEG_PATH=./tools/ffmpeg/bin/ffmpeg|" \
-      "s|FFPROBE_PATH=.*|FFPROBE_PATH=./tools/ffmpeg/bin/ffprobe|" \
-      "s|AUTO_EDITOR_PATH=.*|AUTO_EDITOR_PATH=./tools/auto-editor/$AUTO_EDITOR_ASSET|" \
-      "$ENV_FILE" 2>/dev/null || true
-    ok ".env aus .env.example erzeugt (macOS-Pfade angepasst)"
+    ok ".env aus .env.example erzeugt"
     warn "Bitte API-Schluessel eintragen: $ENV_FILE"
   else
     warn ".env.example nicht gefunden – .env wurde nicht erzeugt."
   fi
 else
-  ok ".env bereits vorhanden, wird nicht ueberschrieben"
+  ok ".env bereits vorhanden"
+fi
+
+# Tool-Pfade in .env immer auf korrekte macOS-Werte setzen (kein .exe)
+# Läuft sowohl bei Erstanlage als auch bei bestehender .env.
+# Verhindert, dass Windows-Pfade aus env.example oder Setup-Wizard auf macOS landen.
+if [[ -f "$ENV_FILE" ]]; then
+  sed -i '' \
+    "s|FFMPEG_PATH=.*|FFMPEG_PATH=./tools/ffmpeg/bin/ffmpeg|" \
+    "$ENV_FILE" 2>/dev/null || true
+  sed -i '' \
+    "s|FFPROBE_PATH=.*|FFPROBE_PATH=./tools/ffmpeg/bin/ffprobe|" \
+    "$ENV_FILE" 2>/dev/null || true
+  sed -i '' \
+    "s|AUTO_EDITOR_PATH=.*|AUTO_EDITOR_PATH=./tools/auto-editor/$AUTO_EDITOR_ASSET|" \
+    "$ENV_FILE" 2>/dev/null || true
+  ok "Tool-Pfade in .env auf macOS angepasst (FFMPEG, FFPROBE, AUTO_EDITOR)"
 fi
 
 # ── Node / Electron ────────────────────────────────────────────────────────────
