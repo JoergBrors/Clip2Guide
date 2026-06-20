@@ -225,9 +225,10 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
     });
   }
 
-  // Throttle-Dialog: wird gesetzt wenn ein KI-Anbieter 503/429 zurueckgibt
+  // Throttle-Dialog: wird gesetzt wenn ein KI-Anbieter 503/429 oder Timeout zurueckgibt
   const [throttleDialog, setThrottleDialog] = useState<{
     context: "analyze" | "rewrite";
+    message: string;
     alternatives: ThrottleAlternative[];
   } | null>(null);
 
@@ -364,7 +365,7 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
         } else if (ev.type === "throttled") {
           setAnalyzing(false);
           const alts = (ev.data?.alternatives ?? []) as ThrottleAlternative[];
-          setThrottleDialog({ context: "analyze", alternatives: alts });
+          setThrottleDialog({ context: "analyze", message: ev.message, alternatives: alts });
         } else if (ev.type === "error") {
           setAnalyzing(false);
           setError(ev.message);
@@ -659,7 +660,7 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
         } else if (ev.type === "throttled") {
           setRewritingScene(false);
           const alts = (ev.data?.alternatives ?? []) as ThrottleAlternative[];
-          setThrottleDialog({ context: "rewrite", alternatives: alts });
+          setThrottleDialog({ context: "rewrite", message: ev.message, alternatives: alts });
         } else if (ev.type === "error") {
           setRewritingScene(false);
           setError(ev.message);
@@ -953,7 +954,7 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
             padding: "14px 16px", marginTop: 8,
           }}>
             <p style={{ color: "#ffb74d", fontWeight: 600, margin: "0 0 10px" }}>
-              ⚠️ Modell überlastet – bitte wähle ein alternatives Modell:
+              ⚠️ {throttleDialog.message || "Modell nicht erreichbar – bitte wähle ein alternatives Modell:"}
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {throttleDialog.alternatives.map((alt) => (

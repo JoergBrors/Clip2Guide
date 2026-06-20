@@ -18,9 +18,10 @@ from app.services.storyboard_service import build_analysis_prompt, parse_storybo
 
 logger = logging.getLogger(__name__)
 
-# Azure Cognitive Services hat bei gpt-5-mini deutlich hoehere Latenz als
-# Azure OpenAI. 180s Timeout verhindert stilles Haengen bei Verbindungsproblemen.
-_REQUEST_TIMEOUT = 180
+# gpt-5-mini ist ein Reasoning-Modell: internes Reasoning verbraucht deutlich
+# mehr Zeit als normale Modelle. 300s Timeout um Abbrueche bei komplexen
+# multimodalen Anfragen mit mehreren Bildern zu vermeiden.
+_REQUEST_TIMEOUT = 300
 
 
 class AzureCognitiveProvider(AiProviderBase):
@@ -73,7 +74,7 @@ class AzureCognitiveProvider(AiProviderBase):
                 model=self._deployment,
                 messages=[{"role": "user", "content": content}],
                 response_format={"type": "json_object"},
-                max_completion_tokens=4096,
+                max_completion_tokens=16000,  # Reasoning-Modell: Tokens fuer Denken + Antwort
             )
         except Exception as exc:
             logger.warning("AzureCognitive analyze_frames Fehler: %s", exc)
@@ -88,7 +89,7 @@ class AzureCognitiveProvider(AiProviderBase):
                 model=self._deployment,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
-                max_completion_tokens=8192,
+                max_completion_tokens=16000,  # Reasoning-Modell: Tokens fuer Denken + Antwort
             )
         except Exception as exc:
             logger.warning("AzureCognitive complete_text Fehler: %s", exc)

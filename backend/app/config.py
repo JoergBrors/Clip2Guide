@@ -91,6 +91,8 @@ class Settings(BaseModel):
     ai_provider: str = os.getenv("AI_PROVIDER", "gemini")
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    # Timeout in Millisekunden fuer Gemini-Anfragen (google-genai SDK erwartet ms)
+    gemini_request_timeout_ms: int = int(os.getenv("GEMINI_REQUEST_TIMEOUT_MS", "120000"))
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1")
     # Azure OpenAI (openai.azure.com)

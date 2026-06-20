@@ -3,6 +3,7 @@ Gemini-Provider: Multimodale Frame-Analyse via Google GenAI SDK (google-genai).
 """
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import List
@@ -14,6 +15,8 @@ from app.config import settings
 from app.models import StoryboardJson
 from app.services.ai_provider_base import AiProviderBase, compress_frame_for_ki
 from app.services.storyboard_service import build_analysis_prompt, parse_storyboard_response
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiProvider(AiProviderBase):
@@ -40,7 +43,10 @@ class GeminiProvider(AiProviderBase):
             print(msg, file=sys.stderr)
             raise ValueError(msg)
 
-        self._client = genai.Client(api_key=settings.gemini_api_key)
+        self._client = genai.Client(
+            api_key=settings.gemini_api_key,
+            http_options=types.HttpOptions(timeout=settings.gemini_request_timeout_ms),
+        )
         self._model_name = model or settings.gemini_model
 
     def analyze_frames(
@@ -62,24 +68,33 @@ class GeminiProvider(AiProviderBase):
             parts.append(types.Part.from_text(text=f"[Bild {i} von {total}]"))
             parts.append(types.Part.from_bytes(data=compress_frame_for_ki(p), mime_type="image/jpeg"))
 
-        response = self._client.models.generate_content(
-            model=self._model_name,
-            contents=[prompt, *parts],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
+        logger.debug("Gemini analyze_frames: model=%s frames=%d", self._model_name, total)
+        try:
+            response = self._client.models.generate_content(
+                model=self._model_name,
+                contents=[prompt, *parts],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
+            )
+        except Exception as exc:
+            logger.warning("Gemini analyze_frames Fehler: %s", exc)
+            raise
 
         raw_json = response.text.strip()
         storyboard = parse_storyboard_response(raw_json, video_id, frame_paths, languages)
         return storyboard
 
     def complete_text(self, prompt: str) -> str:
-        response = self._client.models.generate_content(
-            model=self._model_name,
-            contents=[prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
+        try:
+            response = self._client.models.generate_content(
+                model=self._model_name,
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
+            )
+        except Exception as exc:
+            logger.warning("Gemini complete_text Fehler: %s", exc)
+            raise
         return response.text.strip()

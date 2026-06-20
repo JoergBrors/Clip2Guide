@@ -29,10 +29,10 @@ async def _send(job_id: str, type_: str, step: str, message: str, percent: int =
 async def _call_with_retry(job_id: str, step: str, fn, base_percent: int, *args):
     """Fuehrt fn(*args) in einem Thread-Executor aus.
 
-    Bei Throttling (503/429) wird der Aufruf automatisch mit Exponential-Backoff
-    wiederholt (Anzahl, Wartezeit und Faktor kommen aus den Settings).
-    Waehrenddessen werden Countdown-Progress-Events gesendet.
-    Nach Erschoepfen aller Versuche wird die letzte Exception re-raised.
+    Bei echtem Throttling (429/503) wird mit Exponential-Backoff retried.
+    Bei Timeout/Verbindungsfehler wird sofort abgebrochen (re-raise ohne Retry),
+    damit der Aufrufer unmittelbar das 'throttled'-Event senden und den
+    Nutzer zum Providerwechsel auffordern kann.
     """
     loop = asyncio.get_event_loop()
     max_attempts = max(1, settings.ai_retry_max_attempts + 1)  # +1 = erster Versuch
@@ -46,6 +46,9 @@ async def _call_with_retry(job_id: str, step: str, fn, base_percent: int, *args)
             last_exc = exc
             if not _is_throttle_error(exc):
                 raise  # Nicht-Throttle-Fehler sofort weiterleiten
+            # Timeout / Verbindungsfehler: kein Retry sinnvoll, sofort Providerwechsel anbieten
+            if _is_timeout_error(exc):
+                raise
             retry_left = max_attempts - attempt - 1
             if retry_left <= 0:
                 break  # alle Versuche aufgebraucht
@@ -182,12 +185,31 @@ def _get_provider(req: AnalyzeRequest):
         raise ValueError(f"Unbekannter AI-Provider: {provider_name}")
 
 
+def _is_timeout_error(exc: Exception) -> bool:
+    """Erkennt Timeout- und Verbindungsfehler (kein Retry sinnvoll – sofort Providerwechsel)."""
+    try:
+        import httpx
+        if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError)):
+            return True
+    except ImportError:
+        pass
+    msg = str(exc).lower()
+    return any(k in msg for k in [
+        "timeout", "timed out", "read timeout", "connection error",
+        "connection reset", "connectionreset", "remotedisconnected",
+        "server disconnected",
+    ])
+
+
 def _is_throttle_error(exc: Exception) -> bool:
     """Erkennt transiente Fehler die einen Retry rechtfertigen.
 
     Abgedeckt: HTTP 429/503, Azure-spezifische Fehlercodes, Timeouts,
-    temporaere Verbindungsfehler.
+    Verbindungsfehler.
     """
+    if _is_timeout_error(exc):
+        return True
+
     # openai-SDK wirft APIStatusError mit .status_code
     status_code = getattr(exc, "status_code", None)
     if status_code in (429, 503, 502, 504):
@@ -204,12 +226,10 @@ def _is_throttle_error(exc: Exception) -> bool:
         "insufficient_quota", "request too large", "context_length_exceeded",
         "deployment not found", "deploymentnotfound",
         "model_not_found", "modelerror",
-        # Timeout / Verbindungsfehler
-        "timeout", "timed out", "read timeout", "connection error",
-        "connection reset", "connectionreset", "remotedisconnected",
-        "server disconnected", "temporarilyunavailable",
         # Azure Content Filter kann transient sein bei Systemlast
         "content_filter",
+        # Verbindungsfehler
+        "temporarilyunavailable",
     ])
 
 
@@ -517,7 +537,7 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
             pname = req.ai_provider.value if req.ai_provider else (settings.ai_providers[0] if settings.ai_providers else AiProvider.GEMINI.value)
             mname = _get_effective_model(pname, req.ai_model)
             await _send(job_id, "throttled", "analyze",
-                "Modell überlastet (503/429). Bitte wähle ein alternatives Modell.", 0,
+                "Timeout oder Überlastung – bitte wähle ein alternatives Modell.", 0,
                 {"alternatives": _throttle_alternatives(pname, mname)})
         else:
             await _send(job_id, "error", "analyze", str(exc))
@@ -715,7 +735,7 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
             pname = req.ai_provider.value if req.ai_provider else (settings.ai_providers[0] if settings.ai_providers else AiProvider.GEMINI.value)
             mname = _get_effective_model(pname, req.ai_model)
             await _send(job_id, "throttled", "rewrite",
-                "Modell überlastet (503/429). Bitte wähle ein alternatives Modell.", 0,
+                "Timeout oder Überlastung – bitte wähle ein alternatives Modell.", 0,
                 {"alternatives": _throttle_alternatives(pname, mname)})
         else:
             await _send(job_id, "error", "rewrite", str(exc))
@@ -863,7 +883,7 @@ async def _run_enrich(video_id: str, job_id: str, req: EnrichRequest) -> None:
             pname = req.ai_provider.value if req.ai_provider else (settings.ai_providers[0] if settings.ai_providers else AiProvider.GEMINI.value)
             mname = _get_effective_model(pname, req.ai_model)
             await _send(job_id, "throttled", "enrich",
-                "Modell überlastet (503/429). Bitte wähle ein alternatives Modell.", 0,
+                "Timeout oder Überlastung – bitte wähle ein alternatives Modell.", 0,
                 {"alternatives": _throttle_alternatives(pname, mname)})
         else:
             await _send(job_id, "error", "enrich", str(exc))
