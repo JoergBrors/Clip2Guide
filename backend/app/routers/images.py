@@ -3,6 +3,7 @@ Router: Bild-Upload und -Normalisierung
 """
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -127,6 +128,14 @@ async def upload_images(files: List[UploadFile] = File(...)) -> ImageSetResponse
             height=h,
         ))
 
+    # Upload-Reihenfolge persistieren; normalize und to-frames lesen diese Datei
+    # statt sorted() zu verwenden, damit die Ordner/Bild-Nummerierung erhalten bleibt.
+    order_file = img_dir / "order.json"
+    order_file.write_text(
+        json.dumps([img.image_id for img in images], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
     return ImageSetResponse(session_id=session_id, images=images)
 
 
@@ -147,11 +156,25 @@ async def normalize_images(req: NormalizeRequest) -> NormalizeResponse:
 
     target = (req.target_width, req.target_height)
 
-    # Alle Quellbilder (keine Unterordner)
-    src_files = sorted(
-        f for f in img_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in _ALLOWED_SUFFIXES
-    )
+    # Reihenfolge aus order.json lesen; Fallback: alphabetisch sortiert
+    order_file = img_dir / "order.json"
+    if order_file.exists():
+        image_ids: list[str] = json.loads(order_file.read_text(encoding="utf-8"))
+        src_files = []
+        for iid in image_ids:
+            found = _find_image(img_dir, iid)
+            if found:
+                src_files.append(found)
+        # Bilder ohne Eintrag in order.json anhängen (Defensiv-Fallback)
+        ordered_set = {str(f) for f in src_files}
+        for f in sorted(img_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in _ALLOWED_SUFFIXES and str(f) not in ordered_set:
+                src_files.append(f)
+    else:
+        src_files = sorted(
+            f for f in img_dir.iterdir()
+            if f.is_file() and f.suffix.lower() in _ALLOWED_SUFFIXES
+        )
     if not src_files:
         raise HTTPException(404, "Keine Bilder in dieser Session")
 
@@ -212,10 +235,29 @@ def images_to_frames(session_id: str) -> FrameStack:
         f for f in norm_dir.iterdir() if f.is_file() and f.suffix.lower() in _ALLOWED_SUFFIXES
     ) else img_dir
 
-    src_files = sorted(
-        f for f in src_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in _ALLOWED_SUFFIXES
-    )
+    # Reihenfolge aus order.json lesen; Fallback: alphabetisch sortiert
+    order_file = img_dir / "order.json"
+    if order_file.exists():
+        image_ids_ordered: list[str] = json.loads(order_file.read_text(encoding="utf-8"))
+        src_files = []
+        for iid in image_ids_ordered:
+            # Im normalisierten Verzeichnis haben alle Dateien die Endung .jpg
+            candidate = src_dir / f"{iid}.jpg"
+            if candidate.exists():
+                src_files.append(candidate)
+                continue
+            found = _find_image(src_dir, iid)
+            if found:
+                src_files.append(found)
+        ordered_set = {str(f) for f in src_files}
+        for f in sorted(src_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in _ALLOWED_SUFFIXES and str(f) not in ordered_set:
+                src_files.append(f)
+    else:
+        src_files = sorted(
+            f for f in src_dir.iterdir()
+            if f.is_file() and f.suffix.lower() in _ALLOWED_SUFFIXES
+        )
     if not src_files:
         raise HTTPException(404, "Keine Bilder in dieser Session")
 

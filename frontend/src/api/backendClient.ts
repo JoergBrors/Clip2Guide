@@ -97,6 +97,11 @@ export interface ImageInfo {
   height: number;
 }
 
+export interface FolderGroup {
+  folderName: string;
+  imageIds: string[];
+}
+
 export interface ImageSetResponse {
   session_id: string;
   images: ImageInfo[];

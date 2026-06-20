@@ -9,7 +9,7 @@ import SetupWizard from "./components/SetupWizard";
 import UpdateWindow from "./components/UpdateWindow";
 import SettingsPanel from "./components/SettingsPanel";
 import DebugPanel from "./components/DebugPanel";
-import type { ImageInfo, StoryboardDraftHints } from "./api/backendClient";
+import type { ImageInfo, StoryboardDraftHints, FolderGroup } from "./api/backendClient";
 import { api } from "./api/backendClient";
 
 type Step = "upload" | "image-adjust" | "processing" | "frames" | "storyboard" | "render";
@@ -48,6 +48,7 @@ export default function App(): React.ReactElement {
   const [draftHints, setDraftHints] = useState<StoryboardDraftHints | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [folderGroups, setFolderGroups] = useState<FolderGroup[] | undefined>(undefined);
 
   // Update-Fenster: URL-Parameter ?update=1 → Requirements-Install-Fortschritt zeigen.
   const isUpdateMode = new URLSearchParams(window.location.search).get("update") === "1";
@@ -76,11 +77,14 @@ export default function App(): React.ReactElement {
     setStep("processing");
   }
 
-  function handleImagesUploaded(sessionId: string, images: ImageInfo[]) {
+  function handleImagesUploaded(sessionId: string, images: ImageInfo[], groups?: FolderGroup[]) {
+    setFolderGroups(groups);
     setProject({
       mode: "images",
       videoId: "",
-      filename: `${images.length} Bilder`,
+      filename: groups
+        ? `${groups.length} Ordner · ${images.length} Bilder`
+        : `${images.length} Bilder`,
       hasAudio: false,
       imageSessionId: sessionId,
       imageInfos: images,
@@ -92,6 +96,7 @@ export default function App(): React.ReactElement {
     const stack = await api.imagesToFrames(_sessionId);
     setProject((prev) => prev ? { ...prev, videoId: stack.video_id } : prev);
     setStep("frames");
+    // folderGroups bleiben im State und werden an FrameStack weitergegeben
   }
 
   function handleProcessed() {
@@ -192,6 +197,7 @@ export default function App(): React.ReactElement {
           <ImageAdjust
             sessionId={project.imageSessionId}
             images={project.imageInfos}
+            folderGroups={folderGroups}
             onDone={handleImageAdjustDone}
           />
         )}
@@ -216,6 +222,7 @@ export default function App(): React.ReactElement {
             videoId={project.videoId}
             onDone={handleImageFramesDone}
             disableExtract
+            initialFolderGroups={folderGroups}
           />
         )}
         {step === "storyboard" && project && project.mode === "video" && (

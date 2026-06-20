@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { api, ImageInfo, NormalizeRequest } from "../api/backendClient";
+import { api, ImageInfo, NormalizeRequest, FolderGroup } from "../api/backendClient";
 import ImageHoverZoom from "./ImageHoverZoom";
 
 type NormalizeMode = "crop" | "fit" | "stretch";
@@ -7,10 +7,11 @@ type NormalizeMode = "crop" | "fit" | "stretch";
 interface Props {
   sessionId: string;
   images: ImageInfo[];
+  folderGroups?: FolderGroup[];
   onDone: (sessionId: string, images: ImageInfo[]) => void;
 }
 
-export default function ImageAdjust({ sessionId, images, onDone }: Props): React.ReactElement {
+export default function ImageAdjust({ sessionId, images, folderGroups, onDone }: Props): React.ReactElement {
   // Häufigste Bildgröße als Vorschlag ermitteln
   function detectCommonSize(): { w: number; h: number } {
     if (!images.length) return { w: 1920, h: 1080 };
@@ -75,12 +76,26 @@ export default function ImageAdjust({ sessionId, images, onDone }: Props): React
       <h2 style={{ marginTop: 0, color: "#4fc3f7" }}>Bilder anpassen</h2>
 
       {/* Status */}
-      <p style={{ color: "#aaa", marginBottom: 20 }}>
+      <p style={{ color: "#aaa", marginBottom: folderGroups ? 8 : 20 }}>
         {images.length} Bild{images.length !== 1 ? "er" : ""} hochgeladen.{" "}
         {allSameSize
           ? `Alle haben bereits die Größe ${images[0].width}×${images[0].height} px.`
           : "Die Bilder haben unterschiedliche Größen – bitte Zielgröße festlegen."}
       </p>
+      {folderGroups && (
+        <div style={{
+          background: "#0d2137",
+          border: "1px solid #1e4976",
+          borderRadius: 6,
+          padding: "8px 12px",
+          fontSize: 12,
+          color: "#90caf9",
+          marginBottom: 20,
+        }}>
+          📁 {folderGroups.length} Ordner werden im nächsten Schritt als Scenes vorbelegt:&nbsp;
+          {folderGroups.map((g) => g.folderName).join(", ")}
+        </div>
+      )}
 
       {/* Einstellungen */}
       <div

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { api, ImageInfo } from "../api/backendClient";
+import { api, ImageInfo, FolderGroup } from "../api/backendClient";
 import ImageHoverZoom from "./ImageHoverZoom";
 
 type UploadMode = "video" | "images";
@@ -7,17 +7,19 @@ type UploadMode = "video" | "images";
 interface LocalImage {
   file: File;
   dataUrl: string | null;  // null für HEIC/HEIF (Browser kann kein HEIC rendern)
+  folderName?: string;     // gesetzt wenn via Ordner-Import
 }
 
 interface Props {
   onUploaded: (videoId: string, filename: string, hasAudio: boolean) => void;
-  onImagesUploaded: (sessionId: string, images: ImageInfo[]) => void;
+  onImagesUploaded: (sessionId: string, images: ImageInfo[], folderGroups?: FolderGroup[]) => void;
   onProjectImported: (videoId: string) => void;
 }
 
 export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImported }: Props): React.ReactElement {
   const videoInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const restoreInputRef = useRef<HTMLInputElement>(null);
 
   const [mode, setMode] = useState<UploadMode>("video");
@@ -107,8 +109,66 @@ export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImp
 
   function onImageInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     if (e.target.files) addFiles(e.target.files);
-    // Input zurücksetzen, damit dieselben Dateien erneut gewählt werden können
     e.target.value = "";
+  }
+
+  function onFolderInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []).filter(_isImageFile);
+    e.target.value = "";
+    if (!files.length) return;
+
+    // webkitRelativePath hat die Form "RootOrdner/Unterordner/datei.jpg"
+    // → parts[parts.length - 2] ist der direkte Elternordner der Datei.
+    // Liegt eine Datei direkt im gewählten Root-Ordner (parts.length === 2),
+    // verwenden wir den Root-Ordner selbst als Scene-Namen.
+    // Tiefere Verschachtelung (parts.length > 3) wird auf den ersten Unterordner (parts[1]) normalisiert,
+    // damit jeder direkte Unterordner des Root eine Scene wird.
+    function sceneNameForFile(file: File): string {
+      const parts = (file.webkitRelativePath || file.name).split("/");
+      if (parts.length <= 1) return "(kein Ordner)";
+      if (parts.length === 2) return parts[0];        // Datei direkt im Root → Root-Name
+      return parts[1];                                // Unterordner-Name (tiefere Ebenen ignorieren)
+    }
+
+    // Führende Zahl aus einem String extrahieren; fehlt sie → Infinity (alphabetisch ans Ende)
+    function leadingNumber(s: string): number {
+      const m = s.match(/^(\d+)/);
+      return m ? parseInt(m[1], 10) : Infinity;
+    }
+
+    // Sortierung: erst Ordner-Nummer aufsteigend, dann Bild-Nummer aufsteigend,
+    // Fallback auf alphabetischen Vergleich wenn kein führendes Zahl-Präfix vorhanden.
+    const sorted = [...files].sort((a, b) => {
+      const sa = sceneNameForFile(a);
+      const sb = sceneNameForFile(b);
+      const na = leadingNumber(sa);
+      const nb = leadingNumber(sb);
+      if (na !== nb) return na - nb;
+      if (sa !== sb) return sa.localeCompare(sb, undefined, { sensitivity: "base" });
+      const fa = leadingNumber(a.name);
+      const fb = leadingNumber(b.name);
+      if (fa !== fb) return fa - fb;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+
+    Promise.all(
+      sorted.map(
+        (file) =>
+          new Promise<LocalImage>((resolve) => {
+            const folderName = sceneNameForFile(file);
+            if (_isHeic(file)) {
+              resolve({ file, dataUrl: null, folderName });
+              return;
+            }
+            const reader = new FileReader();
+            reader.onload = (ev) =>
+              resolve({ file, dataUrl: ev.target?.result as string, folderName });
+            reader.readAsDataURL(file);
+          }),
+      ),
+    ).then((imgs) => {
+      setLocalImages(imgs);
+    });
   }
 
   async function uploadImages() {
@@ -119,7 +179,28 @@ export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImp
     try {
       const result = await api.uploadImages(localImages.map((li) => li.file));
       setImgProgress(100);
-      onImagesUploaded(result.session_id, result.images);
+
+      // Ordner-Gruppen rekonstruieren: Backend gibt images in derselben Reihenfolge zurück.
+      const hasFolders = localImages.some((li) => li.folderName !== undefined);
+      let folderGroups: FolderGroup[] | undefined;
+      if (hasFolders) {
+        const groupMap = new Map<string, string[]>();
+        for (let i = 0; i < localImages.length; i++) {
+          const folder = localImages[i].folderName ?? "(kein Ordner)";
+          const imageId = result.images[i]?.image_id;
+          if (!imageId) continue;
+          if (!groupMap.has(folder)) groupMap.set(folder, []);
+          groupMap.get(folder)!.push(imageId);
+        }
+        // Reihenfolge der Ordner aus dem ersten Auftreten in localImages ableiten
+        const orderedFolders = [...new Set(localImages.map((li) => li.folderName ?? "(kein Ordner)"))];
+        folderGroups = orderedFolders.map((name) => ({
+          folderName: name,
+          imageIds: groupMap.get(name) ?? [],
+        }));
+      }
+
+      onImagesUploaded(result.session_id, result.images, folderGroups);
     } catch (e: unknown) {
       setImgError(e instanceof Error ? e.message : "Upload fehlgeschlagen");
       setImgUploading(false);
@@ -264,6 +345,46 @@ export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImp
             eine einheitliche Größe gebracht.
           </p>
 
+          {/* Auswahl-Buttons */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => { if (!imgUploading) imageInputRef.current?.click(); }}
+              disabled={imgUploading}
+              title="Einzelne Bilddateien auswählen"
+            >
+              🖼️ Bilder wählen
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => { if (!imgUploading) folderInputRef.current?.click(); }}
+              disabled={imgUploading}
+              title="Ordner wählen – jeder Ordner wird eine Scene"
+            >
+              📁 Ordner wählen
+            </button>
+          </div>
+
+          {/* Info: Ordner-Modus aktiv */}
+          {localImages.some((li) => li.folderName !== undefined) && (
+            <div style={{
+              background: "#0d2137",
+              border: "1px solid #1e4976",
+              borderRadius: 6,
+              padding: "8px 12px",
+              fontSize: 12,
+              color: "#90caf9",
+              marginBottom: 12,
+            }}>
+              📁 Ordner-Modus: {[...new Set(localImages.map((li) => li.folderName))].length} Ordner
+              → {[...new Set(localImages.map((li) => li.folderName))].length} Scenes vorbelegt
+              &nbsp;|&nbsp;
+              {[...new Set(localImages.map((li) => li.folderName))].join(", ")}
+            </div>
+          )}
+
           {/* Drop-Zone */}
           <div
             role="button"
@@ -306,6 +427,16 @@ export default function VideoUpload({ onUploaded, onImagesUploaded, onProjectImp
             accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
             multiple
             onChange={onImageInputChange}
+            style={{ display: "none" }}
+            aria-hidden="true"
+          />
+          <input
+            ref={folderInputRef}
+            type="file"
+            // @ts-expect-error – webkitdirectory ist kein Standard-HTML-Attribut, funktioniert aber in Electron/Chrome
+            webkitdirectory=""
+            multiple
+            onChange={onFolderInputChange}
             style={{ display: "none" }}
             aria-hidden="true"
           />

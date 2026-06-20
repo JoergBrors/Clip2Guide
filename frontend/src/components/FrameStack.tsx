@@ -3,6 +3,7 @@ import {
   api,
   FrameStack as FrameStackData,
   FrameInfo,
+  FolderGroup,
   subscribeToJob,
   JobEvent,
   StoryboardDraftHints,
@@ -15,9 +16,10 @@ interface Props {
   videoId: string;
   onDone: (selectedFrames: string[], sceneGroups: string[][], draftHints: StoryboardDraftHints) => void;
   disableExtract?: boolean;
+  initialFolderGroups?: FolderGroup[];
 }
 
-export default function FrameStack({ videoId, onDone, disableExtract = false }: Props): React.ReactElement {
+export default function FrameStack({ videoId, onDone, disableExtract = false, initialFolderGroups }: Props): React.ReactElement {
   const [frameStack, setFrameStack] = useState<FrameStackData | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [extractProgress, setExtractProgress] = useState(0);
@@ -85,6 +87,37 @@ export default function FrameStack({ videoId, onDone, disableExtract = false }: 
       skipNextFrameStackSyncRef.current = false;
       return;
     }
+
+    // Ordner-Gruppen: Frames in Upload-Reihenfolge auf Ordner aufteilen.
+    // imagesToFrames kopiert Bilder als frame_001.jpg, frame_002.jpg, … in Upload-Reihenfolge.
+    // FolderGroup.imageIds ist ebenfalls in Upload-Reihenfolge → globaler Index = Position in flat list.
+    if (initialFolderGroups && initialFolderGroups.length > 0) {
+      const sortedFrames = [...frameStack.frames].sort((a, b) => a.timestamp_seconds - b.timestamp_seconds);
+      // Globale Reihenfolge aller imageIds aufbauen (entspricht Frame-Index)
+      const allImageIds = initialFolderGroups.flatMap((g) => g.imageIds);
+      const map = new Map<number, FrameInfo[]>();
+      const descriptions: Record<number, string> = {};
+      initialFolderGroups.forEach((group, sceneIdx) => {
+        map.set(sceneIdx, []);
+        descriptions[sceneIdx] = group.folderName;
+      });
+      sortedFrames.forEach((frame, frameIdx) => {
+        const imageId = allImageIds[frameIdx];
+        if (!imageId) {
+          // Überzählige Frames landen in der letzten Szene
+          const lastIdx = initialFolderGroups.length - 1;
+          map.get(lastIdx)!.push(frame);
+          return;
+        }
+        const groupIdx = initialFolderGroups.findIndex((g) => g.imageIds.includes(imageId));
+        if (groupIdx < 0) return;
+        map.get(groupIdx)!.push(frame);
+      });
+      setLocalSceneFrames(map);
+      setSceneDescriptions(descriptions);
+      return;
+    }
+
     const map = new Map<number, FrameInfo[]>();
     for (const f of frameStack.frames) {
       const s = f.scene_index ?? 0;
