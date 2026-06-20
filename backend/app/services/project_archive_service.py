@@ -84,6 +84,9 @@ class ProjectArchiveService:
                 rel = self._archive_rel_path(info.filename)
                 if rel is None or info.is_dir() or rel in ("manifest.json", "metadata/export_info.json"):
                     continue
+                # Session-Datei nicht als Datei extrahieren — wird separat in RAM geladen
+                if rel == "session/ki_session.json":
+                    continue
                 self._verify_manifest_hash(zf, rel, manifest)
                 target = self._target_path_for(rel, target_video_id)
                 if target is None:
@@ -93,11 +96,14 @@ class ProjectArchiveService:
                     shutil.copyfileobj(src, dst)
                 restored += 1
 
+            session_restored = self._restore_ki_session(zf, target_video_id, original_video_id)
+
         self._rewrite_imported_ids(target_video_id)
         return {
             "video_id": target_video_id,
             "original_video_id": original_video_id,
             "restored_files": restored,
+            "session_restored": session_restored,
             "message": "Projektstand wiederhergestellt",
         }
 
@@ -118,6 +124,30 @@ class ProjectArchiveService:
             "sha256": _hashlib.sha256(raw).hexdigest(),
             "size": len(raw),
         })
+
+    def _restore_ki_session(
+        self,
+        zf: zipfile.ZipFile,
+        target_video_id: str,
+        original_video_id: str,
+    ) -> bool:
+        """Lädt die KI-Session aus dem ZIP und stellt sie im session_store wieder her."""
+        session_arc = f"{self._ZIP_ROOT}/session/ki_session.json"
+        if session_arc not in zf.namelist():
+            return False
+        try:
+            from app.services.session_store import session_store, KiSession
+            raw = zf.read(session_arc)
+            data = json.loads(raw.decode("utf-8"))
+            if data.get("schema") != "ki_session_v1":
+                return False
+            # video_id auf neue ID umschreiben
+            data["video_id"] = target_video_id
+            session = KiSession.from_archive_dict(data)
+            session_store.restore(session)
+            return True
+        except Exception:
+            return False
 
     def _add_project_files(self, zf: zipfile.ZipFile, video_id: str, files: list[dict[str, Any]]) -> None:
         ai_dir = settings.ai_output_dir / video_id
