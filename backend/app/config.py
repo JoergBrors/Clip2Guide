@@ -102,7 +102,7 @@ class Settings(BaseModel):
     azure_cognitive_api_key: str = os.getenv("AZURE_COGNITIVE_API_KEY", "")
     azure_cognitive_endpoint: str = os.getenv("AZURE_COGNITIVE_ENDPOINT", "")
     azure_cognitive_deployment: str = os.getenv("AZURE_COGNITIVE_DEPLOYMENT", "gpt-5-mini")
-    azure_cognitive_api_version: str = os.getenv("AZURE_COGNITIVE_API_VERSION", "2025-04-01-preview")
+    azure_cognitive_api_version: str = os.getenv("AZURE_COGNITIVE_API_VERSION", "2024-12-01-preview")
 
     # Tools – plattformabhängige Dateiendung (.exe nur auf Windows)
     ffmpeg_path: Path = _resolve(
@@ -146,13 +146,13 @@ class Settings(BaseModel):
     max_parallel_languages: int = int(os.getenv("MAX_PARALLEL_LANGUAGES", "4"))
     ffmpeg_threads_per_job: int = int(os.getenv("FFMPEG_THREADS_PER_JOB", "2"))
 
-    # KI-Retry bei Throttling (503/429)
+    # KI-Retry bei Throttling / transienten Fehlern (503/429/timeout)
     # Maximale Anzahl an Wiederholungsversuchen pro KI-Aufruf (0 = kein Retry)
     ai_retry_max_attempts: int = int(os.getenv("AI_RETRY_MAX_ATTEMPTS", "3"))
     # Wartezeit in Sekunden vor dem ersten Retry
-    ai_retry_initial_delay: float = float(os.getenv("AI_RETRY_INITIAL_DELAY", "10"))
-    # Multiplikator fuer Exponential-Backoff (naechster Versuch wartet delay * factor)
-    ai_retry_backoff_factor: float = float(os.getenv("AI_RETRY_BACKOFF_FACTOR", "2.0"))
+    ai_retry_initial_delay: float = float(os.getenv("AI_RETRY_INITIAL_DELAY", "5"))
+    # Multiplikator fuer Exponential-Backoff (5s → 15s → 45s bei Faktor 3)
+    ai_retry_backoff_factor: float = float(os.getenv("AI_RETRY_BACKOFF_FACTOR", "3.0"))
     # Maximale Wartezeit zwischen zwei Retries in Sekunden
     ai_retry_max_delay: float = float(os.getenv("AI_RETRY_MAX_DELAY", "60"))
 
