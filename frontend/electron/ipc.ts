@@ -144,6 +144,60 @@ export function registerAll(ipcMain: IpcMain): void {
     return result;
   });
 
+  // ── .env-Migration ─────────────────────────────────────────────────────────
+
+  /**
+   * Parst .env.example und die User-.env, gibt fehlende Keys mit Metadaten zurück.
+   * Rückgabe: Array von { key, defaultValue, comments, sensitive }
+   */
+  ipcMain.handle("env:check-migration", (_event, examplePath: string) => {
+    if (!fs.existsSync(examplePath) || !fs.existsSync(USER_ENV_FILE)) return [];
+
+    // User-.env einlesen
+    const userEnv: Record<string, string> = {};
+    for (const line of fs.readFileSync(USER_ENV_FILE, "utf8").split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) continue;
+      const idx = t.indexOf("=");
+      if (idx < 0) continue;
+      userEnv[t.slice(0, idx).trim()] = t.slice(idx + 1).trim();
+    }
+
+    // .env.example parsen: Keys + Default + vorherige Kommentarzeilen sammeln
+    const exampleLines = fs.readFileSync(examplePath, "utf8").split(/\r?\n/);
+    const missing: Array<{ key: string; defaultValue: string; comments: string[]; sensitive: boolean }> = [];
+    const pendingComments: string[] = [];
+
+    for (const line of exampleLines) {
+      const t = line.trim();
+      if (!t) { pendingComments.length = 0; continue; }
+      if (t.startsWith("#")) { pendingComments.push(t.slice(1).trim()); continue; }
+      const idx = t.indexOf("=");
+      if (idx < 0) { pendingComments.length = 0; continue; }
+      const key = t.slice(0, idx).trim();
+      const defaultValue = t.slice(idx + 1).trim();
+      if (!(key in userEnv)) {
+        const sensitive = /key|secret|password|token/i.test(key);
+        missing.push({ key, defaultValue, comments: [...pendingComments], sensitive });
+      }
+      pendingComments.length = 0;
+    }
+
+    return missing;
+  });
+
+  /** Schreibt fehlende Keys in die User-.env (Kommentare werden mit übertragen). */
+  ipcMain.handle("env:apply-migration", (_event, entries: Array<{ key: string; value: string; comments: string[] }>) => {
+    if (!fs.existsSync(USER_ENV_FILE) || entries.length === 0) return;
+    const existing = fs.readFileSync(USER_ENV_FILE, "utf8");
+    const appendLines: string[] = ["", "# ── Neue Einstellungen (automatisch ergänzt) ──────────────────────────────"];
+    for (const { key, value, comments } of entries) {
+      for (const c of comments) appendLines.push(`# ${c}`);
+      appendLines.push(`${key}=${value}`);
+    }
+    fs.writeFileSync(USER_ENV_FILE, existing.trimEnd() + "\n" + appendLines.join("\n") + "\n", "utf8");
+  });
+
   // ── Deinstallation ─────────────────────────────────────────────────────────
 
   /**

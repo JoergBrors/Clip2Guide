@@ -69,6 +69,17 @@ contextBridge.exposeInMainWorld("updateAPI", {
   },
 });
 
+/** .env-Migrations-API */
+contextBridge.exposeInMainWorld("envMigrateAPI", {
+  checkMigration: (examplePath: string): Promise<Array<{ key: string; defaultValue: string; comments: string[]; sensitive: boolean }>> =>
+    ipcRenderer.invoke("env:check-migration", examplePath),
+  applyMigration: (entries: Array<{ key: string; value: string; comments: string[] }>): Promise<void> =>
+    ipcRenderer.invoke("env:apply-migration", entries),
+  done: (): void => { ipcRenderer.send("env:migrate-done"); },
+  skip: (): void => { ipcRenderer.send("env:migrate-skip"); },
+  getExamplePath: (): string => new URLSearchParams(window.location.search).get("examplePath") ?? "",
+});
+
 /** Uninstall-API */
 contextBridge.exposeInMainWorld("appAPI", {
   uninstall: (deleteUserData: boolean): Promise<{ confirmed: boolean }> =>

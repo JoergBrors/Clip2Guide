@@ -7,6 +7,7 @@ import SceneEditor from "./components/SceneEditor";
 import RenderPanel from "./components/RenderPanel";
 import SetupWizard from "./components/SetupWizard";
 import UpdateWindow from "./components/UpdateWindow";
+import EnvMigrateWindow from "./components/EnvMigrateWindow";
 import SettingsPanel from "./components/SettingsPanel";
 import DebugPanel from "./components/DebugPanel";
 import type { ImageInfo, StoryboardDraftHints, FolderGroup } from "./api/backendClient";
@@ -54,6 +55,12 @@ export default function App(): React.ReactElement {
   const isUpdateMode = new URLSearchParams(window.location.search).get("update") === "1";
   if (isUpdateMode) {
     return <UpdateWindow />;
+  }
+
+  // .env-Migrations-Fenster: URL-Parameter ?migrate=1 → neue Konfigurationsparameter übernehmen.
+  const isMigrateMode = new URLSearchParams(window.location.search).get("migrate") === "1";
+  if (isMigrateMode) {
+    return <EnvMigrateWindow />;
   }
 
   // Setup-Wizard: URL-Parameter ?setup=1 signalisiert, dass das Einrichtungsfenster aktiv ist.

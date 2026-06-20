@@ -33,6 +33,69 @@ export const USER_LOCAL_DIR: string = (() => {
 let mainWindow: BrowserWindow | null = null;
 let backendProcess: ChildProcess | null = null;
 
+// ── .env-Migrations-Check ────────────────────────────────────────────────────
+
+/**
+ * Prüft ob .env.example neue Keys enthält die in der User-.env fehlen.
+ * Gibt den Pfad zur .env.example und die Anzahl fehlender Keys zurück.
+ */
+function checkEnvMigration(): { needed: false } | { needed: true; examplePath: string } {
+  if (!fs.existsSync(USER_ENV_FILE)) return { needed: false }; // Kein Setup → Setup-Wizard handelt das
+
+  const resourcesRoot = app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "../../..");
+  const examplePath = path.join(resourcesRoot, ".env.example");
+  if (!fs.existsSync(examplePath)) return { needed: false };
+
+  // User-.env Keys einlesen
+  const userKeys = new Set<string>();
+  for (const line of fs.readFileSync(USER_ENV_FILE, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const idx = t.indexOf("=");
+    if (idx >= 0) userKeys.add(t.slice(0, idx).trim());
+  }
+
+  // .env.example Keys prüfen
+  for (const line of fs.readFileSync(examplePath, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const idx = t.indexOf("=");
+    if (idx < 0) continue;
+    const key = t.slice(0, idx).trim();
+    if (!userKeys.has(key)) return { needed: true, examplePath };
+  }
+
+  return { needed: false };
+}
+
+/** Öffnet das .env-Migrations-Fenster. */
+function createEnvMigrateWindow(examplePath: string): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 700,
+    height: 560,
+    resizable: true,
+    title: "Clip2Guide – Neue Einstellungen",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+
+  const query = { migrate: "1", examplePath: encodeURIComponent(examplePath) };
+  if (isDev) {
+    const params = new URLSearchParams(query).toString();
+    win.loadURL(`http://localhost:${VITE_PORT}?${params}`);
+  } else {
+    win.loadFile(
+      path.join(__dirname, "../../dist/renderer/index.html"),
+      { query }
+    );
+  }
+  return win;
+}
+
 // ── Requirements-Check beim Start ────────────────────────────────────────────
 
 /**
@@ -276,6 +339,31 @@ async function clearStartupCache(): Promise<void> {
 
 // ── App-Lifecycle ──────────────────────────────────────────────────────────────
 
+/**
+ * Führt nach Requirements-Update (oder direkt beim Start) den .env-Migrations-Check
+ * durch. Wenn neue Keys vorhanden: Migrations-Dialog öffnen, danach Backend starten.
+ * Sonst direkt Backend + Hauptfenster starten.
+ */
+function launchAfterChecks(): void {
+  const migCheck = checkEnvMigration();
+  if (migCheck.needed) {
+    const migrateWin = createEnvMigrateWindow(migCheck.examplePath);
+    ipcMain.once("env:migrate-done", () => {
+      migrateWin.close();
+      startBackend();
+      setTimeout(() => createWindow(), 1500);
+    });
+    ipcMain.once("env:migrate-skip", () => {
+      migrateWin.close();
+      startBackend();
+      setTimeout(() => createWindow(), 1500);
+    });
+  } else {
+    startBackend();
+    setTimeout(() => createWindow(), 1500);
+  }
+}
+
 app.whenReady().then(async () => {
   await clearStartupCache();
   registerIpcHandlers();
@@ -312,16 +400,13 @@ app.whenReady().then(async () => {
       updateWin.webContents.once("did-finish-load", () => {
         runPipInstall(updateWin, reqCheck.venvPython, reqCheck.reqPath, reqCheck.currentHash);
       });
-      // Nach Abschluss (Erfolg oder Fehler): Update-Fenster schließen, weiter
+      // Nach Abschluss: Update-Fenster schließen, dann Migrations-Check, dann Hauptfenster
       ipcMain.once("update:close", () => {
         updateWin.close();
-        startBackend();
-        setTimeout(() => createWindow(), 1500);
+        launchAfterChecks();
       });
     } else {
-      startBackend();
-      // Kurz warten bis Backend bereit ist
-      setTimeout(() => createWindow(), 1500);
+      launchAfterChecks();
     }
   }
 
