@@ -148,6 +148,18 @@ class RenderRequest(BaseModel):
         default=False,
         description="Wenn true, werden Texte fuer das DOCX-Handbuch per KI optimiert."
     )
+    handbook_address_style: str = Field(
+        default="sie",
+        description="Anredeform fuer Handbuch-Texte: du | sie | neutral"
+    )
+    handbook_writing_style: str = Field(
+        default="sachlich",
+        description="Schreibstil: sachlich | leicht_verstaendlich | technisch_detailliert"
+    )
+    handbook_detail_level: str = Field(
+        default="standard",
+        description="Detailtiefe: kurz | standard | ausfuehrlich"
+    )
     ai_provider: Optional[AiProvider] = None
     ai_model: Optional[str] = None
     fps: int = Field(default=25, ge=10, le=60)
@@ -165,6 +177,9 @@ class RewriteSceneRequest(BaseModel):
     languages: List[str] = Field(default_factory=lambda: ["de"])
     ai_provider: Optional[AiProvider] = None
     ai_model: Optional[str] = None
+    address_style: str = Field(default="sie", description="Anredeform: du | sie | neutral")
+    writing_style: str = Field(default="sachlich", description="Schreibstil: sachlich | leicht_verstaendlich | technisch_detailliert")
+    detail_level: str = Field(default="standard", description="Detailtiefe: kurz | standard | ausfuehrlich")
     current_texts: Optional[Dict[str, TextPanel]] = Field(
         None,
         description="Vom Nutzer manuell bearbeitete Texte der Szene (heading/body/speaker_notes je Sprache)."

@@ -183,11 +183,33 @@ def _get_provider(req: AnalyzeRequest):
 
 
 def _is_throttle_error(exc: Exception) -> bool:
-    """Erkennt 503/429 Throttling-Fehler aller KI-Anbieter."""
+    """Erkennt transiente Fehler die einen Retry rechtfertigen.
+
+    Abgedeckt: HTTP 429/503, Azure-spezifische Fehlercodes, Timeouts,
+    temporaere Verbindungsfehler.
+    """
+    # openai-SDK wirft APIStatusError mit .status_code
+    status_code = getattr(exc, "status_code", None)
+    if status_code in (429, 503, 502, 504):
+        return True
+
     msg = str(exc).lower()
     return any(k in msg for k in [
-        "503", "429", "high demand", "overloaded", "rate limit", "rate_limit",
-        "quota", "too many requests", "resource exhausted", "unavailable", "capacity",
+        # HTTP-Statuscodes als String
+        "503", "429", "502", "504",
+        # Generische Throttling-Begriffe
+        "rate limit", "rate_limit", "too many requests", "overloaded",
+        "high demand", "resource exhausted", "quota", "capacity",
+        # Azure-spezifische Fehlercodes
+        "insufficient_quota", "request too large", "context_length_exceeded",
+        "deployment not found", "deploymentnotfound",
+        "model_not_found", "modelerror",
+        # Timeout / Verbindungsfehler
+        "timeout", "timed out", "read timeout", "connection error",
+        "connection reset", "connectionreset", "remotedisconnected",
+        "server disconnected", "temporarilyunavailable",
+        # Azure Content Filter kann transient sein bei Systemlast
+        "content_filter",
     ])
 
 
@@ -244,18 +266,6 @@ def _throttle_alternatives(current_provider: str, current_model: str) -> list[di
                 "label": f"{provider_labels.get(p, p)} · {provider_defaults[p]}",
             })
     return alternatives[:6]
-
-    if provider_name == AiProvider.GEMINI.value:
-        from app.services.gemini_provider import GeminiProvider
-        return GeminiProvider(model=model)
-    elif provider_name == AiProvider.OPENAI.value:
-        from app.services.openai_provider import OpenAiProvider
-        return OpenAiProvider(model=model)
-    elif provider_name == AiProvider.AZURE_OPENAI.value:
-        from app.services.azure_openai_provider import AzureOpenAiProvider
-        return AzureOpenAiProvider(model=model)
-    else:
-        raise ValueError(f"Unbekannter AI-Provider: {provider_name}")
 
 
 def _build_analyze_master_context(req: AnalyzeRequest, provider_name: str, model_name: str) -> dict:
@@ -408,13 +418,14 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
                         f"{scene_description}"
                     )
                 image_prompt_lines = []
-                for fn in group_filenames:
+                for fn_idx, fn in enumerate(group_filenames, 1):
                     image_prompt = req.image_prompts.get(fn, "").strip()
                     if image_prompt:
-                        image_prompt_lines.append(f"  Bild '{fn}': {image_prompt}")
+                        image_prompt_lines.append(f"  [Bild {fn_idx}] {fn}: {image_prompt}")
                 if image_prompt_lines:
                     prompt_parts.append(
-                        "Bildspezifische KI-Anweisungen des Nutzers:\n"
+                        "WICHTIG – Bildspezifische Nutzer-Anweisungen (haben hoechste Prioritaet):\n"
+                        "Berücksichtige diese Anweisungen ZUERST beim Beschreiben der jeweiligen Bilder:\n"
                         + "\n".join(image_prompt_lines)
                     )
                 prompt_extra = "\n\n".join(prompt_parts)
@@ -455,11 +466,25 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
         else:
             # ── Standard: KI erkennt Szenen selbst ───────────────────────────────────────
             await _send(job_id, "progress", "analyze", f"Analysiere {len(frame_paths)} Frames...", 20)
-            standard_prompt_extra = (
-                "Allgemein vorangestellter Master-Prompt des Nutzers:\n"
-                f"{master_prompt}"
-                if master_prompt else ""
-            )
+            standard_prompt_parts = []
+            if master_prompt:
+                standard_prompt_parts.append(
+                    "Allgemein vorangestellter Master-Prompt des Nutzers:\n"
+                    f"{master_prompt}"
+                )
+            if req.image_prompts:
+                img_lines = []
+                for fp in frame_paths:
+                    ip = req.image_prompts.get(fp.name, "").strip()
+                    if ip:
+                        img_lines.append(f"  {fp.name}: {ip}")
+                if img_lines:
+                    standard_prompt_parts.append(
+                        "WICHTIG – Bildspezifische Nutzer-Anweisungen (haben hoechste Prioritaet):\n"
+                        "Berücksichtige diese beim Beschreiben der jeweiligen Bilder:\n"
+                        + "\n".join(img_lines)
+                    )
+            standard_prompt_extra = "\n\n".join(standard_prompt_parts)
             sys_prompt = build_analysis_prompt(req.languages, video_id, standard_prompt_extra, len(frame_paths))
             await _send(job_id, "debug", "analyze",
                         f"Provider: {provider_name} / {model_name}\n"
@@ -589,12 +614,16 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
         # Bild-spezifische KI-Anweisungen
         image_prompt_hint = ""
         if req.image_prompts:
-            lines = ["Fuer folgende Bilder hat der Nutzer spezifische KI-Anweisungen angegeben:"]
+            lines = [
+                "WICHTIG – Bildspezifische Nutzer-Anweisungen (haben hoechste Prioritaet):\n"
+                "Berücksichtige die folgenden Anweisungen ZUERST beim Verfassen von heading, body und speaker_notes. "
+                "Sie beschreiben, was der Nutzer bei diesem konkreten Bild besonders hervorgehoben haben moechte:"
+            ]
             for fn, ip in req.image_prompts.items():
                 if ip and ip.strip():
                     pos = next((i + 1 for i, p in enumerate(frame_paths) if p.name == fn), None)
-                    pos_str = f" (Position {pos})" if pos else ""
-                    lines.append(f"  Bild '{fn}'{pos_str}: {ip.strip()}")
+                    pos_label = f"[Bild {pos}]" if pos else f"[{fn}]"
+                    lines.append(f"  {pos_label} {fn}: {ip.strip()}")
             if len(lines) > 1:
                 image_prompt_hint = "\n".join(lines)
 
@@ -609,6 +638,28 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
                 f"Halte heading und body ebenfalls praegnant und zum Umfang passend."
             )
 
+        _ADDRESS_HINTS = {
+            "du": "Verwende in heading, body und speaker_notes durchgehend die Du-Form ('du', 'dein').",
+            "sie": "Verwende in heading, body und speaker_notes durchgehend die Sie-Form ('Sie', 'Ihr').",
+            "neutral": "Schreibe unpersoenlich ohne direkte Ansprache (kein 'du', kein 'Sie'). Verwende Infinitivkonstruktionen oder sachliche Beschreibungen.",
+        }
+        _STYLE_HINTS = {
+            "sachlich": "Schreibstil: sachlich und praezise. Vollstaendige Saetze, klare Struktur, keine Umgangssprache.",
+            "leicht_verstaendlich": "Schreibstil: leicht verstaendlich. Kurze Saetze, einfache Woerter, aktive Formulierungen.",
+            "technisch_detailliert": "Schreibstil: technisch detailliert. Fachterminologie verwenden, Ablaeufe praezise beschreiben.",
+        }
+        _DETAIL_HINTS = {
+            "kurz": "Detailtiefe: kurz. heading maximal 6 Woerter, body maximal 2 Saetze, speaker_notes maximal 3 Saetze.",
+            "standard": "Detailtiefe: standard. Ausgewogene Laenge fuer heading, body und speaker_notes.",
+            "ausfuehrlich": "Detailtiefe: ausfuehrlich. Erklaere heading, body und speaker_notes umfassend auf Basis der Bilder und vorhandenen Texte. Keine erfundenen Fakten.",
+        }
+        style_hint = "\n".join([
+            "Stil-Vorgaben fuer diese Szene:",
+            _ADDRESS_HINTS.get(req.address_style, _ADDRESS_HINTS["sie"]),
+            _STYLE_HINTS.get(req.writing_style, _STYLE_HINTS["sachlich"]),
+            _DETAIL_HINTS.get(req.detail_level, _DETAIL_HINTS["standard"]),
+        ])
+
         prompt_extra = "\n\n".join(filter(None, [
             f"Hinweis: Diese Frames gehoeren alle zu EINER zusammenhaengenden Szene. "
             f"Erstelle genau eine Szene mit scene_id '{req.scene_id}'.",
@@ -620,6 +671,7 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
             duration_hint,
             image_prompt_hint,
             user_text_hint,
+            style_hint,
         ]))
 
         # Debug-Event: Prompt-Details an den Client senden

@@ -13,7 +13,7 @@ from openai import AzureOpenAI
 
 from app.config import settings
 from app.models import StoryboardJson
-from app.services.ai_provider_base import AiProviderBase
+from app.services.ai_provider_base import AiProviderBase, compress_frame_for_ki
 from app.services.storyboard_service import build_analysis_prompt, parse_storyboard_response
 
 
@@ -29,12 +29,14 @@ class AzureOpenAiProvider(AiProviderBase):
             api_key=settings.azure_openai_api_key,
             azure_endpoint=settings.azure_openai_endpoint,
             api_version=settings.azure_openai_api_version,
+            timeout=120,
+            max_retries=0,  # Retry-Logik liegt im _call_with_retry-Wrapper
         )
         # Bei Azure ist das "model" der Deployment-Name
         self._deployment = model or settings.azure_openai_deployment
 
     def _encode_image(self, path: Path) -> str:
-        return base64.b64encode(path.read_bytes()).decode("utf-8")
+        return base64.b64encode(compress_frame_for_ki(path)).decode("utf-8")
 
     def analyze_frames(
         self,

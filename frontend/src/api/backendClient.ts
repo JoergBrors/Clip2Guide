@@ -280,6 +280,9 @@ export const api = {
     durationSeconds?: number,
     storyboardContext?: Record<string, unknown>,
     changeSummary?: string,
+    addressStyle?: string,
+    writingStyle?: string,
+    detailLevel?: string,
   ): Promise<JobStartResponse> {
     return request<JobStartResponse>(`/api/videos/${videoId}/rewrite-scene`, {
       method: "POST",
@@ -295,6 +298,9 @@ export const api = {
         duration_seconds: durationSeconds,
         storyboard_context: storyboardContext,
         change_summary: changeSummary,
+        address_style: addressStyle ?? "sie",
+        writing_style: writingStyle ?? "sachlich",
+        detail_level: detailLevel ?? "standard",
       }),
     });
   },
@@ -332,6 +338,9 @@ export const api = {
     handbookOptimize?: boolean,
     provider?: string,
     model?: string,
+    handbookAddressStyle?: string,
+    handbookWritingStyle?: string,
+    handbookDetailLevel?: string,
   ): Promise<JobStartResponse> {
     return request<JobStartResponse>(`/api/videos/${videoId}/render`, {
       method: "POST",
@@ -343,6 +352,9 @@ export const api = {
         handbook_optimize: handbookOptimize ?? false,
         ai_provider: provider,
         ai_model: model,
+        handbook_address_style: handbookAddressStyle ?? "sie",
+        handbook_writing_style: handbookWritingStyle ?? "sachlich",
+        handbook_detail_level: handbookDetailLevel ?? "standard",
         fps: fps ?? 25,
         quality: quality ?? "ausgewogen",
         tts_slow: ttsSlow ?? false,

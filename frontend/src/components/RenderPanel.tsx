@@ -27,6 +27,9 @@ export default function RenderPanel({ videoId, onProjectImported }: Props): Reac
   const [ttsSlow, setTtsSlow] = useState<boolean>(false);
   const [outputMode, setOutputMode] = useState<OutputMode>("video");
   const [handbookOptimize, setHandbookOptimize] = useState<boolean>(false);
+  const [handbookAddressStyle, setHandbookAddressStyle] = useState<string>("sie");
+  const [handbookWritingStyle, setHandbookWritingStyle] = useState<string>("sachlich");
+  const [handbookDetailLevel, setHandbookDetailLevel] = useState<string>("standard");
   const [availableProviders, setAvailableProviders] = useState<{ id: string; label: string }[]>([]);
   const [provider, setProvider] = useState<string>("");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
@@ -40,6 +43,7 @@ export default function RenderPanel({ videoId, onProjectImported }: Props): Reac
   const [message, setMessage] = useState("");
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [manualFiles, setManualFiles] = useState<string[]>([]);
 
   // Debug-Konsole
   const [log, setLog] = useState<string[]>([]);
@@ -108,6 +112,7 @@ export default function RenderPanel({ videoId, onProjectImported }: Props): Reac
     setDone(false);
     setError(null);
     setLog([]);
+    setManualFiles([]);
     setProgress(5);
     setMessage("Rendering wird gestartet...");
 
@@ -125,6 +130,9 @@ export default function RenderPanel({ videoId, onProjectImported }: Props): Reac
         handbookOptimize,
         handbookOptimize ? provider : undefined,
         handbookOptimize ? selectedModel : undefined,
+        handbookAddressStyle,
+        handbookWritingStyle,
+        handbookDetailLevel,
       );
       subscribeToJob(job_id, (ev: JobEvent) => {
         if (ev.type === "log" || ev.type === "debug") {
@@ -136,6 +144,9 @@ export default function RenderPanel({ videoId, onProjectImported }: Props): Reac
         if (ev.type === "completed") {
           setRendering(false);
           setDone(true);
+          if (ev.data?.manual_files) {
+            setManualFiles(ev.data.manual_files as string[]);
+          }
         } else if (ev.type === "error") {
           setRendering(false);
           setError(ev.message);
@@ -335,9 +346,64 @@ export default function RenderPanel({ videoId, onProjectImported }: Props): Reac
                       checked={handbookOptimize}
                       onChange={(e) => setHandbookOptimize(e.target.checked)}
                     />
-                    <span style={{ fontSize: 13 }}>KI-Segmentierung ohne Inhaltsaenderung</span>
+                    <span style={{ fontSize: 13 }}>KI-Handbuch-Optimierung</span>
                   </label>
                 </div>
+                {(outputMode === "manual" || outputMode === "both") && (
+                  <>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 13, minWidth: 130, color: "#bbb" }}>Anredeform:</span>
+                      {[
+                        { value: "sie", label: "Sie" },
+                        { value: "du", label: "Du" },
+                        { value: "neutral", label: "Neutral" },
+                      ].map((opt) => (
+                        <button
+                          key={opt.value}
+                          className={`btn ${handbookAddressStyle === opt.value ? "btn-primary" : "btn-ghost"}`}
+                          style={{ fontSize: 13, padding: "3px 14px" }}
+                          onClick={() => setHandbookAddressStyle(opt.value)}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 13, minWidth: 130, color: "#bbb" }}>Schreibstil:</span>
+                      {[
+                        { value: "sachlich", label: "Sachlich" },
+                        { value: "leicht_verstaendlich", label: "Leicht verständlich" },
+                        { value: "technisch_detailliert", label: "Technisch detailliert" },
+                      ].map((opt) => (
+                        <button
+                          key={opt.value}
+                          className={`btn ${handbookWritingStyle === opt.value ? "btn-primary" : "btn-ghost"}`}
+                          style={{ fontSize: 13, padding: "3px 14px" }}
+                          onClick={() => setHandbookWritingStyle(opt.value)}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 13, minWidth: 130, color: "#bbb" }}>Detailtiefe:</span>
+                      {[
+                        { value: "kurz", label: "Kurz" },
+                        { value: "standard", label: "Standard" },
+                        { value: "ausfuehrlich", label: "Ausführlich" },
+                      ].map((opt) => (
+                        <button
+                          key={opt.value}
+                          className={`btn ${handbookDetailLevel === opt.value ? "btn-primary" : "btn-ghost"}`}
+                          style={{ fontSize: 13, padding: "3px 14px" }}
+                          onClick={() => setHandbookDetailLevel(opt.value)}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
                 {handbookOptimize && (
                   <>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -460,16 +526,21 @@ export default function RenderPanel({ videoId, onProjectImported }: Props): Reac
                   </a>
                 )}
                 {(outputMode === "manual" || outputMode === "both") && (
-                  <a
-                    href={`${backendBase}/api/videos/${videoId}/manual/manual_${lang}.docx`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn btn-primary"
-                    style={{ textDecoration: "none", display: "inline-flex", width: "fit-content" }}
-                    download={`manual_${lang}.docx`}
-                  >
-                    ⬇ manual_{lang}.docx herunterladen
-                  </a>
+                  manualFiles
+                    .filter((f) => f.endsWith(`_${lang}.docx`))
+                    .map((filename) => (
+                      <a
+                        key={filename}
+                        href={`${backendBase}/api/videos/${videoId}/manual/${encodeURIComponent(filename)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn btn-primary"
+                        style={{ textDecoration: "none", display: "inline-flex", width: "fit-content" }}
+                        download={filename}
+                      >
+                        ⬇ {filename} herunterladen
+                      </a>
+                    ))
                 )}
               </React.Fragment>
             ))}

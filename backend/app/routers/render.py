@@ -245,6 +245,9 @@ def _render_manual_worker(
             ai_provider=req.ai_provider,
             ai_model=req.ai_model,
             debug_callback=debug_prompt,
+            address_style=req.handbook_address_style,
+            writing_style=req.handbook_writing_style,
+            detail_level=req.handbook_detail_level,
         )
         push("log", "render", f"[{lang}] Handbuch gespeichert: {out_path}", base + 80)
         return str(out_path)
@@ -350,7 +353,7 @@ async def _run_render(video_id: str, job_id: str, req: RenderRequest) -> None:
             raise RuntimeError("\n".join(errors))
 
         output_files = [str(f) for f in output_dir.glob("*.mp4")]
-        manual_files = [str(f) for f in output_dir.glob("manual_*.docx")]
+        manual_files = [f.name for f in output_dir.glob("*.docx")]
         await _send(
             job_id, "completed", "render",
             f"Rendering abgeschlossen. {len(output_files)} Video(s), {len(manual_files)} Handbuch-Datei(en).", 100,
@@ -388,7 +391,7 @@ async def download_manual(video_id: str, filename: str) -> FileResponse:
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
     path = settings.render_output_dir / video_id / filename
-    if not path.exists() or path.suffix.lower() != ".docx" or not filename.startswith("manual_"):
+    if not path.exists() or path.suffix.lower() != ".docx":
         raise HTTPException(status_code=404, detail="Handbuch-Datei nicht gefunden")
     return FileResponse(
         str(path),

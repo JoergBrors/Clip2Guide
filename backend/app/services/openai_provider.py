@@ -11,7 +11,7 @@ from openai import OpenAI
 
 from app.config import settings
 from app.models import StoryboardJson
-from app.services.ai_provider_base import AiProviderBase
+from app.services.ai_provider_base import AiProviderBase, compress_frame_for_ki
 from app.services.storyboard_service import build_analysis_prompt, parse_storyboard_response
 
 
@@ -20,11 +20,11 @@ class OpenAiProvider(AiProviderBase):
     def __init__(self, model: str | None = None) -> None:
         if not settings.openai_api_key:
             raise ValueError("OPENAI_API_KEY ist nicht gesetzt.")
-        self._client = OpenAI(api_key=settings.openai_api_key)
+        self._client = OpenAI(api_key=settings.openai_api_key, timeout=120, max_retries=0)
         self._model_name = model or settings.openai_model
 
     def _encode_image(self, path: Path) -> str:
-        return base64.b64encode(path.read_bytes()).decode("utf-8")
+        return base64.b64encode(compress_frame_for_ki(path)).decode("utf-8")
 
     def analyze_frames(
         self,

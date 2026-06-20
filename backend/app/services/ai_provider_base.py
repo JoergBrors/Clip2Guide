@@ -3,11 +3,36 @@ AI-Provider – Abstrakte Basisklasse
 """
 from __future__ import annotations
 
+import io
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List
 
 from app.models import StoryboardJson
+
+# Zielgröße und Qualität für KI-Übertragung.
+# 768px Kantenlänge reicht für Texterkennung und UI-Details; Qualität 40
+# liefert ~10-25 KB pro Frame statt 200-800 KB im Original.
+_KI_MAX_SIDE = 768
+_KI_JPEG_QUALITY = 40
+
+
+def compress_frame_for_ki(path: Path) -> bytes:
+    """Liest ein Frame, skaliert auf max. _KI_MAX_SIDE px und komprimiert als JPEG."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("Pillow ist nicht installiert.") from exc
+
+    with Image.open(path) as img:
+        img = img.convert("RGB")
+        w, h = img.size
+        if max(w, h) > _KI_MAX_SIDE:
+            scale = _KI_MAX_SIDE / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=_KI_JPEG_QUALITY, optimize=True)
+        return buf.getvalue()
 
 
 class AiProviderBase(ABC):

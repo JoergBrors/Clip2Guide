@@ -74,6 +74,10 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
   const [rewritingScene, setRewritingScene] = useState(false);
   const [rewriteMsg, setRewriteMsg] = useState("");
   const [rewriteProgress, setRewriteProgress] = useState(0);
+  const [showRewritePanel, setShowRewritePanel] = useState(false);
+  const [rewriteAddressStyle, setRewriteAddressStyle] = useState("sie");
+  const [rewriteWritingStyle, setRewriteWritingStyle] = useState("sachlich");
+  const [rewriteDetailLevel, setRewriteDetailLevel] = useState("standard");
   // Szenen-IDs die nach einem Rewrite nicht automatisch angereichert werden sollen
   const [rewrittenSceneIds, setRewrittenSceneIds] = useState<Set<string>>(new Set());
   // Timer-Refs fuer debounced Auto-Rewrite (sceneId -> timer)
@@ -606,6 +610,9 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
         scn.duration_seconds ?? undefined,
         buildRewriteContext(sb),
         changeSummary,
+        rewriteAddressStyle,
+        rewriteWritingStyle,
+        rewriteDetailLevel,
       );
       const sceneIdForEnrich = scn.scene_id;
       const capturedSceneIdx = sceneIdx;
@@ -1070,14 +1077,87 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
                     <button
                       className="btn btn-ghost"
                       style={{ fontSize: 12, padding: "4px 12px", borderColor: "#4fc3f7", color: "#4fc3f7" }}
-                      onClick={() => runRewriteScene()}
+                      onClick={() => setShowRewritePanel((v) => !v)}
                       disabled={rewritingScene || scene.image_group.length === 0}
-                      title={`KI schreibt Szene neu (${provider} / ${selectedModel || "Standard"})`}
                     >
-                      {rewritingScene ? `⏳ ${rewriteProgress}%` : "🤖 KI: Szene neu schreiben"}
+                      {rewritingScene ? `⏳ ${rewriteProgress}%` : `🤖 KI: Szene neu schreiben ${showRewritePanel ? "▲" : "▼"}`}
                     </button>
                   </div>
                 </div>
+
+                {/* KI Rewrite Panel */}
+                {showRewritePanel && !rewritingScene && (
+                  <div style={{ marginBottom: 14, padding: "12px 14px", background: "#0a0f1a", borderRadius: 6, border: "1px solid #1e3a5f" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+
+                      {/* Anredeform */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12, minWidth: 110, color: "#8ab" }}>Anredeform:</span>
+                        {[{ v: "sie", l: "Sie" }, { v: "du", l: "Du" }, { v: "neutral", l: "Neutral" }].map(({ v, l }) => (
+                          <button type="button" key={v} className={`btn ${rewriteAddressStyle === v ? "btn-primary" : "btn-ghost"}`}
+                            style={{ fontSize: 12, padding: "2px 12px" }} onClick={() => setRewriteAddressStyle(v)}>{l}</button>
+                        ))}
+                      </div>
+
+                      {/* Schreibstil */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12, minWidth: 110, color: "#8ab" }}>Schreibstil:</span>
+                        {[{ v: "sachlich", l: "Sachlich" }, { v: "leicht_verstaendlich", l: "Leicht verständlich" }, { v: "technisch_detailliert", l: "Technisch detailliert" }].map(({ v, l }) => (
+                          <button type="button" key={v} className={`btn ${rewriteWritingStyle === v ? "btn-primary" : "btn-ghost"}`}
+                            style={{ fontSize: 12, padding: "2px 12px" }} onClick={() => setRewriteWritingStyle(v)}>{l}</button>
+                        ))}
+                      </div>
+
+                      {/* Detailtiefe */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12, minWidth: 110, color: "#8ab" }}>Detailtiefe:</span>
+                        {[{ v: "kurz", l: "Kurz" }, { v: "standard", l: "Standard" }, { v: "ausfuehrlich", l: "Ausführlich" }].map(({ v, l }) => (
+                          <button type="button" key={v} className={`btn ${rewriteDetailLevel === v ? "btn-primary" : "btn-ghost"}`}
+                            style={{ fontSize: 12, padding: "2px 12px" }} onClick={() => setRewriteDetailLevel(v)}>{l}</button>
+                        ))}
+                      </div>
+
+                      {/* KI-Provider */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12, minWidth: 110, color: "#8ab" }}>KI-Provider:</span>
+                        {availableProviders.map((p) => (
+                          <button type="button" key={p.id} className={`btn ${provider === p.id ? "btn-primary" : "btn-ghost"}`}
+                            style={{ fontSize: 12, padding: "2px 12px" }} onClick={() => setProvider(p.id)}>{p.label}</button>
+                        ))}
+                      </div>
+
+                      {/* KI-Modell */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12, minWidth: 110, color: "#8ab" }}>KI-Modell:</span>
+                        {modelsLoading && <span style={{ fontSize: 12, color: "#666" }}>Lädt...</span>}
+                        {modelsError && <span style={{ fontSize: 12, color: "#ef5350" }}>⚠ {modelsError}</span>}
+                        {!modelsLoading && !modelsError && (
+                          <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}
+                            aria-label="KI-Modell auswählen"
+                            style={{ fontSize: 12, padding: "3px 8px", background: "#1a1a2e", color: "#e0e0e0", border: "1px solid #333", borderRadius: 4, minWidth: 200 }}>
+                            {availableModels.map((m, i) => (
+                              <option key={m} value={m}>{i + 1}. {m}</option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+
+                      {/* Start-Button */}
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+                        <button type="button" className="btn btn-primary" style={{ fontSize: 13, padding: "5px 20px" }}
+                          onClick={() => {
+                            setShowRewritePanel(false);
+                            const styleInfo = `Anredeform: ${rewriteAddressStyle}, Stil: ${rewriteWritingStyle}, Detail: ${rewriteDetailLevel}`;
+                            runRewriteScene(undefined, undefined, undefined, undefined, `Manueller Rewrite – ${styleInfo}`);
+                          }}
+                          disabled={scene.image_group.length === 0}>
+                          Szene neu schreiben
+                        </button>
+                      </div>
+
+                    </div>
+                  </div>
+                )}
 
                 {/* Bilder-Gruppe */}
                 <div

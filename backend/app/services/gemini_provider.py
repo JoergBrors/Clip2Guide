@@ -12,7 +12,7 @@ from google.genai import types
 
 from app.config import settings
 from app.models import StoryboardJson
-from app.services.ai_provider_base import AiProviderBase
+from app.services.ai_provider_base import AiProviderBase, compress_frame_for_ki
 from app.services.storyboard_service import build_analysis_prompt, parse_storyboard_response
 
 
@@ -56,11 +56,11 @@ class GeminiProvider(AiProviderBase):
 
         prompt = build_analysis_prompt(languages, video_id, prompt_extra, num_frames=total)
 
-        # Bilder als inline Parts aufbereiten – mit Nummernmarkierung
+        # Bilder komprimiert als inline Parts aufbereiten – mit Nummernmarkierung
         parts: list = []
         for i, p in enumerate(sample_paths, 1):
             parts.append(types.Part.from_text(text=f"[Bild {i} von {total}]"))
-            parts.append(types.Part.from_bytes(data=p.read_bytes(), mime_type="image/jpeg"))
+            parts.append(types.Part.from_bytes(data=compress_frame_for_ki(p), mime_type="image/jpeg"))
 
         response = self._client.models.generate_content(
             model=self._model_name,
