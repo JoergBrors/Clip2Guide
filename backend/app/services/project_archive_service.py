@@ -21,9 +21,9 @@ class ProjectArchiveService:
     _ZIP_ROOT = "clip2guide-project"
     _SCHEMA_VERSION = "1.0"
     _MAX_IMPORT_SIZE = 2 * 1024 * 1024 * 1024
-    _ALLOWED_PREFIXES = ("ai-output/", "frames/", "uploads/", "normalized/", "cut/", "output/", "metadata/")
+    _ALLOWED_PREFIXES = ("ai-output/", "frames/", "uploads/", "normalized/", "cut/", "output/", "metadata/", "session/")
 
-    def export_project(self, video_id: str) -> dict[str, Any]:
+    def export_project(self, video_id: str, include_session: bool = True) -> dict[str, Any]:
         output_dir = settings.render_output_dir / video_id
         output_dir.mkdir(parents=True, exist_ok=True)
         zip_path = output_dir / f"project_{video_id}.zip"
@@ -35,6 +35,8 @@ class ProjectArchiveService:
         try:
             with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 self._add_project_files(zf, video_id, files)
+                if include_session:
+                    self._add_ki_session(zf, video_id, files)
                 manifest = self._build_manifest(video_id, files)
                 manifest_bytes = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
                 zf.writestr(f"{self._ZIP_ROOT}/manifest.json", manifest_bytes)
@@ -98,6 +100,24 @@ class ProjectArchiveService:
             "restored_files": restored,
             "message": "Projektstand wiederhergestellt",
         }
+
+    def _add_ki_session(self, zf: zipfile.ZipFile, video_id: str, files: list[dict[str, Any]]) -> None:
+        """Serialisiert die In-Memory-KI-Session und fügt sie ins ZIP ein."""
+        from app.services.session_store import session_store
+        session = session_store.get(video_id)
+        if session is None:
+            return
+        data = session.to_archive_dict()
+        raw = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        archive_name = f"{self._ZIP_ROOT}/session/ki_session.json"
+        zf.writestr(archive_name, raw)
+        import hashlib as _hashlib
+        files.append({
+            "type": "session",
+            "path": "session/ki_session.json",
+            "sha256": _hashlib.sha256(raw).hexdigest(),
+            "size": len(raw),
+        })
 
     def _add_project_files(self, zf: zipfile.ZipFile, video_id: str, files: list[dict[str, Any]]) -> None:
         ai_dir = settings.ai_output_dir / video_id

@@ -278,7 +278,6 @@ export const api = {
     provider?: string,
     model?: string,
     durationSeconds?: number,
-    storyboardContext?: Record<string, unknown>,
     changeSummary?: string,
     addressStyle?: string,
     writingStyle?: string,
@@ -296,13 +295,45 @@ export const api = {
         ai_provider: provider,
         ai_model: model,
         duration_seconds: durationSeconds,
-        storyboard_context: storyboardContext,
         change_summary: changeSummary,
         address_style: addressStyle ?? "sie",
         writing_style: writingStyle ?? "sachlich",
         detail_level: detailLevel ?? "standard",
       }),
     });
+  },
+
+  chatWithStoryboard(
+    videoId: string,
+    message: string,
+    provider?: string,
+    model?: string,
+    languages?: string[],
+    addressStyle?: string,
+    writingStyle?: string,
+    detailLevel?: string,
+  ): Promise<JobStartResponse> {
+    return request<JobStartResponse>(`/api/videos/${videoId}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message,
+        languages: languages ?? ["de"],
+        ai_provider: provider,
+        ai_model: model,
+        address_style: addressStyle ?? "sie",
+        writing_style: writingStyle ?? "sachlich",
+        detail_level: detailLevel ?? "standard",
+      }),
+    });
+  },
+
+  getKiSession(videoId: string): Promise<Record<string, unknown>> {
+    return request(`/api/videos/${videoId}/ki-session`);
+  },
+
+  resetKiSession(videoId: string): Promise<void> {
+    return request(`/api/videos/${videoId}/ki-session`, { method: "DELETE" });
   },
 
   uploadCustomFrames(videoId: string, files: File[]): Promise<FrameStack> {

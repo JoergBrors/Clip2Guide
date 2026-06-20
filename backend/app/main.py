@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import shutil
 import sys
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +18,23 @@ from fastapi.responses import StreamingResponse
 
 from app import job_store
 from app.config import settings
+
+# ── Python-Logging in Datei ───────────────────────────────────────────────────
+_log_file = os.environ.get("BACKEND_LOG_FILE")
+if _log_file:
+    _handler = RotatingFileHandler(
+        _log_file, maxBytes=512 * 1024, backupCount=1, encoding="utf-8"
+    )
+    _handler.setFormatter(logging.Formatter(
+        "[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    logging.getLogger().addHandler(_handler)
+    logging.getLogger().setLevel(logging.DEBUG)
+    # google-genai und httpx auf INFO drosseln (sonst zu viele HTTP-Details)
+    logging.getLogger("httpx").setLevel(logging.INFO)
+    logging.getLogger("httpcore").setLevel(logging.INFO)
+    logging.getLogger("google").setLevel(logging.INFO)
 from app.models import HealthResponse
 from app.routers import ai, frames, images, processing, projects, render, upload
 

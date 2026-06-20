@@ -202,6 +202,21 @@ class RewriteSceneRequest(BaseModel):
     )
 
 
+class ChatMessage(BaseModel):
+    role: str = Field(..., description="'user' oder 'assistant'")
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., description="Neue Nachricht des Nutzers")
+    languages: List[str] = Field(default_factory=lambda: ["de"])
+    ai_provider: Optional[AiProvider] = None
+    ai_model: Optional[str] = None
+    address_style: str = Field(default="sie", description="Anredeform: du | sie | neutral")
+    writing_style: str = Field(default="sachlich", description="Schreibstil: sachlich | leicht_verstaendlich | technisch_detailliert")
+    detail_level: str = Field(default="standard", description="Detailtiefe: kurz | standard | ausfuehrlich")
+
+
 class EnrichRequest(BaseModel):
     languages: List[str] = Field(default_factory=lambda: ["de"])
     scene_ids: Optional[List[str]] = Field(

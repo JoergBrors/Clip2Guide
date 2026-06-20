@@ -247,21 +247,70 @@ function startBackend(): void {
     return;
   }
 
+  // Log-Datei für Backend-Output anlegen (rotierend: max 2 Dateien à 512 KB)
+  const logDir = path.join(USER_LOCAL_DIR, "workspace", "logs");
+  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+  const logPath = path.join(logDir, "backend.log");
+
+  function rotateLogs(): void {
+    try {
+      if (fs.existsSync(logPath) && fs.statSync(logPath).size > 512 * 1024) {
+        const prev = logPath + ".1";
+        if (fs.existsSync(prev)) fs.unlinkSync(prev);
+        fs.renameSync(logPath, prev);
+      }
+    } catch { /* ignore */ }
+  }
+
+  rotateLogs();
+  const logStream = fs.createWriteStream(logPath, { flags: "a", encoding: "utf8" });
+
+  function appendLog(line: string): void {
+    const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
+    logStream.write(`[${ts}] ${line}\n`);
+  }
+
+  appendLog(`--- Backend-Start (PID wird gesetzt) ---`);
+
   backendProcess = spawn(
     venvPython,
-    ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(BACKEND_PORT)],
+    ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(BACKEND_PORT),
+     "--log-level", "debug"],
     {
       cwd: backendCwd,
       // PROJECT_ROOT → config.py löst ./workspace, ./tools relativ dazu auf
-      env: { ...process.env, APP_ENV_FILE: USER_ENV_FILE, PROJECT_ROOT: USER_LOCAL_DIR },
+      env: {
+        ...process.env,
+        APP_ENV_FILE: USER_ENV_FILE,
+        PROJECT_ROOT: USER_LOCAL_DIR,
+        BACKEND_LOG_FILE: logPath,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     }
   );
 
-  backendProcess.stdout?.on("data", (d) => console.log("[backend]", d.toString().trim()));
-  backendProcess.stderr?.on("data", (d) => console.error("[backend]", d.toString().trim()));
-  backendProcess.on("exit", (code) => console.log("[backend] Prozess beendet, Code:", code));
-  backendProcess.on("error", (err) => console.error("[backend] Spawn-Fehler:", err.message));
+  appendLog(`Backend-PID: ${backendProcess.pid}`);
+
+  backendProcess.stdout?.on("data", (d) => {
+    const msg = d.toString().trimEnd();
+    console.log("[backend]", msg);
+    for (const line of msg.split(/\r?\n/)) if (line.trim()) appendLog(`STDOUT ${line}`);
+  });
+  backendProcess.stderr?.on("data", (d) => {
+    const msg = d.toString().trimEnd();
+    console.error("[backend]", msg);
+    for (const line of msg.split(/\r?\n/)) if (line.trim()) appendLog(`STDERR ${line}`);
+  });
+  backendProcess.on("exit", (code) => {
+    const msg = `[backend] Prozess beendet, Code: ${code}`;
+    console.log(msg);
+    appendLog(msg);
+  });
+  backendProcess.on("error", (err) => {
+    const msg = `[backend] Spawn-Fehler: ${err.message}`;
+    console.error(msg);
+    appendLog(msg);
+  });
 }
 
 // ── Fenster erstellen ─────────────────────────────────────────────────────────

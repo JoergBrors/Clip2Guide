@@ -6,7 +6,8 @@ from __future__ import annotations
 import json
 import re
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable
@@ -67,6 +68,36 @@ class ManualOptimizationOptions:
     writing_style: str = "sachlich"
     detail_level: str = "standard"
     doc_title: str = ""
+
+
+@dataclass
+class _HandbuchSessionEntry:
+    scene_id: str
+    heading: str
+    segments: list[dict[str, str]]   # [{image, text}, ...]
+
+
+@dataclass
+class _HandbuchSession:
+    """In-Memory-Session für einen Handbuch-Render-Vorgang (nicht in session_store)."""
+    video_id: str
+    lang: str
+    options: ManualOptimizationOptions
+    source_name: str
+    total_scenes: int
+    completed: list[_HandbuchSessionEntry] = field(default_factory=list)
+    doc_title: str = ""
+
+    def context_summary(self) -> str:
+        """Kompakter Kontext der bereits fertiggestellten Szenen für den nächsten Prompt."""
+        lines = [
+            f"Handbuch-Session: {self.source_name}, Sprache {self.lang}, "
+            f"{len(self.completed)}/{self.total_scenes} Szenen fertig.",
+            f"Stil: {self.options.address_style} | {self.options.writing_style} | {self.options.detail_level}",
+        ]
+        for entry in self.completed[-5:]:
+            lines.append(f"  {entry.scene_id}: {entry.heading[:60]!r} → {len(entry.segments)} Segment(e)")
+        return "\n".join(lines)
 
 
 class ManualRenderService:
@@ -152,58 +183,75 @@ class ManualRenderService:
         debug_callback: Callable[[str, str], None] | None = None,
     ) -> tuple[StoryboardJson, str]:
         provider = self._get_provider(ai_provider, ai_model)
+        source_name = Path(storyboard.source_video).stem if storyboard.source_video else storyboard.video_id
+        total_scenes = len(storyboard.scenes)
         total_images = sum(len(s.image_group or []) for s in storyboard.scenes)
+
         if debug_callback:
             debug_callback("manual-options", json.dumps({
                 "lang": options.lang,
                 "address_style": options.address_style,
                 "writing_style": options.writing_style,
                 "detail_level": options.detail_level,
-                "scene_count": len(storyboard.scenes),
+                "scene_count": total_scenes,
                 "image_count": total_images,
+                "mode": "scene-by-scene",
             }, ensure_ascii=False))
-        prompt = self._build_manual_prompt(storyboard, options)
-        if debug_callback:
-            debug_callback("manual-prompt", prompt)
-            debug_callback("manual-status", "KI-Anfrage für Handbuch-Optimierung gesendet. Warte auf Antwort.")
-        raw = provider.complete_text(prompt)
-        if debug_callback:
-            debug_callback("manual-response", raw)
-        data = self._parse_json(raw)
-        optimized = deepcopy(storyboard)
-        scenes_raw = data.get("scenes")
-        # Einige Modelle verpacken die Liste in einen zusaetzlichen Wrapper-Key
-        if not isinstance(scenes_raw, list):
-            for val in data.values():
-                if isinstance(val, list):
-                    scenes_raw = val
-                    break
-        if not isinstance(scenes_raw, list):
-            preview = raw[:300].replace("\n", " ")
-            raise ValueError(f"Handbuch-KI-Antwort enthält keine scenes-Liste. Antwort-Anfang: {preview}")
-        if len(scenes_raw) != len(storyboard.scenes):
-            raise ValueError(
-                f"Handbuch-KI-Antwort verändert die Szenenanzahl "
-                f"(erwartet {len(storyboard.scenes)}, erhalten {len(scenes_raw)})."
-            )
 
-        for idx, (source_scene, raw_scene) in enumerate(zip(storyboard.scenes, scenes_raw)):
-            if not isinstance(raw_scene, dict):
-                raise ValueError(f"Handbuch-KI-Antwort Szene {idx + 1} ist kein Objekt.")
-            if raw_scene.get("scene_id") != source_scene.scene_id:
-                raise ValueError(
-                    f"Handbuch-KI-Antwort verändert scene_id in Szene {idx + 1} "
-                    f"(erwartet '{source_scene.scene_id}', erhalten '{raw_scene.get('scene_id')}')."
+        # Neue In-Memory-Session für diesen Handbuch-Vorgang
+        session = _HandbuchSession(
+            video_id=storyboard.video_id,
+            lang=options.lang,
+            options=options,
+            source_name=source_name,
+            total_scenes=total_scenes,
+        )
+
+        optimized = deepcopy(storyboard)
+
+        for idx, source_scene in enumerate(storyboard.scenes):
+            scene_num = idx + 1
+            if debug_callback:
+                debug_callback(
+                    "manual-status",
+                    f"Szene {scene_num}/{total_scenes}: {source_scene.scene_id} "
+                    f"({len(source_scene.image_group)} Bild(er))…"
                 )
-            if raw_scene.get("image_group") != source_scene.image_group:
-                raise ValueError(f"Handbuch-KI-Antwort verändert image_group in Szene {idx + 1}.")
-            segments_raw = raw_scene.get("segments")
+
+            prompt = self._build_scene_prompt(source_scene, options, session, scene_num)
+
+            if debug_callback:
+                debug_callback(f"manual-prompt-{scene_num}", prompt)
+
+            raw = provider.complete_text(prompt)
+
+            if debug_callback:
+                debug_callback(f"manual-response-{scene_num}", raw[:1000])
+
+            # Titel aus erster Szene lesen
+            data = self._parse_json(raw)
+            if not session.doc_title:
+                session.doc_title = str(data.get("title", "")).strip()
+
+            # Segmente validieren und übernehmen
+            segments_raw = data.get("segments")
             if not isinstance(segments_raw, list):
-                raise ValueError(f"Handbuch-KI-Antwort Szene {idx + 1}: 'segments' fehlt oder ist keine Liste.")
-            if len(segments_raw) != len(source_scene.image_group):
+                # Fallback: ganzes Storyboard in scenes-Liste
+                scenes_list = data.get("scenes")
+                if isinstance(scenes_list, list) and len(scenes_list) == 1:
+                    segments_raw = scenes_list[0].get("segments")
+            if not isinstance(segments_raw, list):
+                preview = raw[:300].replace("\n", " ")
                 raise ValueError(
-                    f"Handbuch-KI-Antwort Szene {idx + 1}: Segmentanzahl stimmt nicht "
-                    f"(erwartet {len(source_scene.image_group)}, erhalten {len(segments_raw)})."
+                    f"Handbuch-KI-Antwort Szene {scene_num} enthält keine segments-Liste. "
+                    f"Antwort-Anfang: {preview}"
+                )
+
+            expected_count = len(source_scene.image_group)
+            if len(segments_raw) != expected_count:
+                raise ValueError(
+                    f"Handbuch-KI-Antwort Szene {scene_num}: Segmentanzahl stimmt nicht "
+                    f"(erwartet {expected_count}, erhalten {len(segments_raw)})."
                 )
 
             source_lang_text = source_scene.texts.get(options.lang, TextPanel())
@@ -212,23 +260,28 @@ class ManualRenderService:
                 or (source_lang_text.speaker_notes or "").strip()
             )
             panels: list[TextPanel] = []
+            session_segments: list[dict[str, str]] = []
+
             for seg_idx, segment in enumerate(segments_raw):
                 if not isinstance(segment, dict):
-                    raise ValueError(f"Handbuch-KI-Antwort Szene {idx + 1}, Segment {seg_idx + 1}: kein Objekt.")
-                expected_image = source_scene.image_group[seg_idx]
-                if segment.get("image") != expected_image:
                     raise ValueError(
-                        f"Handbuch-KI-Antwort Szene {idx + 1}, Segment {seg_idx + 1}: "
-                        f"'image' ist '{segment.get('image')}', erwartet '{expected_image}'."
+                        f"Handbuch-KI-Antwort Szene {scene_num}, Segment {seg_idx + 1}: kein Objekt."
+                    )
+                expected_image = source_scene.image_group[seg_idx]
+                seg_image = segment.get("image", expected_image)
+                if seg_image != expected_image:
+                    raise ValueError(
+                        f"Handbuch-KI-Antwort Szene {scene_num}, Segment {seg_idx + 1}: "
+                        f"'image' ist '{seg_image}', erwartet '{expected_image}'."
                     )
                 seg_text = segment.get("text", "")
                 if not isinstance(seg_text, str):
                     raise ValueError(
-                        f"Handbuch-KI-Antwort Szene {idx + 1}, Segment {seg_idx + 1}: 'text' ist kein String."
+                        f"Handbuch-KI-Antwort Szene {scene_num}, Segment {seg_idx + 1}: 'text' ist kein String."
                     )
                 if input_had_text and not seg_text.strip():
                     raise ValueError(
-                        f"Handbuch-KI-Antwort Szene {idx + 1}, Segment {seg_idx + 1}: "
+                        f"Handbuch-KI-Antwort Szene {scene_num}, Segment {seg_idx + 1}: "
                         "'text' ist leer, obwohl die Eingabe Text enthielt."
                     )
                 panels.append(TextPanel(
@@ -236,7 +289,23 @@ class ManualRenderService:
                     body=seg_text,
                     speaker_notes=seg_text,
                 ))
+                session_segments.append({"image": expected_image, "text": seg_text[:120]})
+
             optimized.scenes[idx].slide_panels[options.lang] = panels
+
+            # Session-Gedächtnis aktualisieren
+            session.completed.append(_HandbuchSessionEntry(
+                scene_id=source_scene.scene_id,
+                heading=source_lang_text.heading or source_scene.scene_id,
+                segments=session_segments,
+            ))
+
+            if debug_callback:
+                debug_callback(
+                    "manual-progress",
+                    f"Szene {scene_num}/{total_scenes} fertig ✓ "
+                    f"({len(panels)} Segment(e) → slide_panels[{options.lang}])"
+                )
 
         optimized.metadata = {
             **optimized.metadata,
@@ -245,15 +314,15 @@ class ManualRenderService:
                 "address_style": options.address_style,
                 "writing_style": options.writing_style,
                 "detail_level": options.detail_level,
-                "mode": "handbook_text",
+                "mode": "scene-by-scene",
+                "scene_count": total_scenes,
                 "instruction": (
-                    "KI-Antwort wurde genutzt, um Sprech-Skript-Text in Handbuch-Prosa umzuwandeln. "
+                    "KI-Antwort wurde szenenweise genutzt, um Sprech-Skript-Text in Handbuch-Prosa umzuwandeln. "
                     "Szenenstruktur und Bildreferenzen stammen unveraendert aus dem Storyboard."
                 ),
             },
         }
-        doc_title = str(data.get("title", "")).strip()
-        return optimized, doc_title
+        return optimized, session.doc_title
 
     def _build_manual_prompt(self, storyboard: StoryboardJson, options: ManualOptimizationOptions) -> str:
         scenes_payload: list[dict[str, Any]] = []
@@ -320,6 +389,76 @@ class ManualRenderService:
             f"Storyboard:\n{json.dumps({'scenes': scenes_payload}, ensure_ascii=False)}"
         )
         return "\n\n".join([framing, address_clause, style_clause, detail_clause, constraints, format_spec, payload])
+
+    def _build_scene_prompt(
+        self,
+        scene: Scene,
+        options: ManualOptimizationOptions,
+        session: "_HandbuchSession",
+        scene_num: int,
+    ) -> str:
+        text = scene.texts.get(options.lang, TextPanel())
+        slide_panels = scene.slide_panels.get(options.lang, []) if scene.slide_panels else []
+        scene_payload = {
+            "scene_id": scene.scene_id,
+            "image_group": scene.image_group,
+            "text": text.model_dump(),
+            "slide_panels": [
+                p.model_dump() if hasattr(p, "model_dump") else p for p in slide_panels
+            ],
+        }
+
+        framing = (
+            f"Du bist ein technischer Redakteur und erstellst Szene {scene_num} von {session.total_scenes} "
+            f"eines Benutzerhandbuchs aus einem Video-Storyboard.\n"
+            f"Quelldatei: {session.source_name}\n"
+            "Das Storyboard enthält Sprech-Skript-Texte. Formuliere jeden Bildabschnitt als zusammenhängenden "
+            "Handbuch-Fließtext (ein Absatz pro Bild)."
+        )
+        address_clause = _ADDRESS_CLAUSES[options.address_style]
+        style_clause = _STYLE_CLAUSES[options.writing_style]
+        detail_clause = _DETAIL_CLAUSES[options.detail_level]
+
+        constraints = (
+            "Erlaubt: Skript-Text in Handbuch-Prosa umformulieren, Stil anpassen, Wiederholungen reduzieren.\n"
+            "Verboten: neue technische Fakten erfinden, Szenen/Bilder verändern, Halluzinationen.\n"
+            "Kein Videojargon: 'hier sehen wir', 'wir klicken jetzt', 'schauen wir uns an' usw."
+        )
+
+        # Session-Kontext: bereits fertige Szenen als Gedächtnis
+        context_block = ""
+        if session.completed:
+            context_block = f"Session-Kontext (bereits fertiggestellte Szenen):\n{session.context_summary()}"
+
+        # Titel nur in erster Szene anfordern
+        title_rule = ""
+        if scene_num == 1:
+            title_rule = (
+                '"title": "Kurzer Handbuch-Titel (max. 6 Wörter, nur Buchstaben/Ziffern/Bindestriche, keine Umlaute)"'
+            )
+            format_spec = (
+                "Gib ausschließlich valides JSON zurück:\n"
+                f'{{"title":"...","segments":[{{"image":"frame_001.jpg","text":"Handbuch-Fließtext..."}}]}}\n'
+                f"Felder: {title_rule}, "
+                f'"segments": exakt {len(scene.image_group)} Einträge, je "image" (identisch) + "text" (nicht leer).'
+            )
+        else:
+            format_spec = (
+                "Gib ausschließlich valides JSON zurück:\n"
+                f'{{"segments":[{{"image":"frame_001.jpg","text":"Handbuch-Fließtext..."}}]}}\n'
+                f'"segments": exakt {len(scene.image_group)} Einträge, je "image" (identisch zur Eingabe) + "text" (nicht leer).'
+            )
+
+        payload = (
+            f"Sprache: {options.lang}\n"
+            f"Diese Szene:\n{json.dumps(scene_payload, ensure_ascii=False)}"
+        )
+
+        parts = [framing, address_clause, style_clause, detail_clause, constraints]
+        if context_block:
+            parts.append(context_block)
+        parts += [format_spec, payload]
+        return "\n\n".join(parts)
 
     def _parse_json(self, raw: str) -> dict[str, Any]:
         cleaned = raw.strip()

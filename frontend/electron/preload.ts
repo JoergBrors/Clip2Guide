@@ -96,6 +96,8 @@ contextBridge.exposeInMainWorld("debugAPI", {
     ipcRenderer.invoke("debug:open-log-dir"),
   openEnvFile: (): Promise<boolean> =>
     ipcRenderer.invoke("debug:open-env-file"),
+  readLog: (lines?: number): Promise<{ lines: string[]; path: string; exists: boolean; total: number }> =>
+    ipcRenderer.invoke("debug:read-log", lines ?? 300),
 });
 
 export type Clip2GuideApi = {

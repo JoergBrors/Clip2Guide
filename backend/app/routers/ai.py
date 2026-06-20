@@ -4,15 +4,20 @@ Router: KI-Analyse (Frame-Analyse → Storyboard)
 from __future__ import annotations
 
 import asyncio
+import logging
+import traceback
 import uuid
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from app import job_store
 from app.config import settings
-from app.models import AnalyzeRequest, AiProvider, EnrichRequest, JobStartResponse, RewriteSceneRequest, StoryboardJson, StoryboardUpdateRequest
+from app.models import AnalyzeRequest, AiProvider, ChatRequest, EnrichRequest, JobStartResponse, RewriteSceneRequest, StoryboardJson, StoryboardUpdateRequest
 from app.services.frame_stack_service import FrameStackService
+from app.services.session_store import session_store
 from app.services.storyboard_service import StoryboardService, build_analysis_prompt, build_enrich_prompt
 
 router = APIRouter()
@@ -88,6 +93,23 @@ AZURE_COGNITIVE_VISION_MODELS: List[str] = [
     "gpt-4.1",
     "gpt-4o",
 ]
+
+
+_ADDRESS_HINTS: dict[str, str] = {
+    "du": "Verwende in heading, body und speaker_notes durchgehend die Du-Form ('du', 'dein').",
+    "sie": "Verwende in heading, body und speaker_notes durchgehend die Sie-Form ('Sie', 'Ihr').",
+    "neutral": "Schreibe unpersoenlich ohne direkte Ansprache (kein 'du', kein 'Sie'). Verwende Infinitivkonstruktionen oder sachliche Beschreibungen.",
+}
+_STYLE_HINTS: dict[str, str] = {
+    "sachlich": "Schreibstil: sachlich und praezise. Vollstaendige Saetze, klare Struktur, keine Umgangssprache.",
+    "leicht_verstaendlich": "Schreibstil: leicht verstaendlich. Kurze Saetze, einfache Woerter, aktive Formulierungen.",
+    "technisch_detailliert": "Schreibstil: technisch detailliert. Fachterminologie verwenden, Ablaeufe praezise beschreiben.",
+}
+_DETAIL_HINTS: dict[str, str] = {
+    "kurz": "Detailtiefe: kurz. heading maximal 6 Woerter, body maximal 2 Saetze, speaker_notes maximal 3 Saetze.",
+    "standard": "Detailtiefe: standard. Ausgewogene Laenge fuer heading, body und speaker_notes.",
+    "ausfuehrlich": "Detailtiefe: ausfuehrlich. Erklaere heading, body und speaker_notes umfassend. Keine erfundenen Fakten.",
+}
 
 
 def _list_gemini_models() -> List[str]:
@@ -332,32 +354,34 @@ def _append_change_history(storyboard: StoryboardJson, change_summary: str, cont
     storyboard.metadata["ai_change_history"] = history[-50:]
 
 
-def _build_storyboard_context_hint(storyboard: StoryboardJson) -> str:
-    """Fasst Master-Kontext, Historie und aktuelle Storyboard-Struktur fuer Rewrites zusammen."""
-    master = storyboard.metadata.get("ai_master_context")
-    history = storyboard.metadata.get("ai_change_history", [])
-    lines: list[str] = [
-        "Gesamt-Kontext des Storyboards:",
-        "Bewahre den urspruenglichen Master-Kontext und die erzählerische Kontinuitaet.",
-    ]
-    if master:
-        lines.append("Urspruenglicher Master-Kontext:")
-        lines.append(str(master))
-    if history:
-        lines.append("Aenderungshistorie:")
-        for item in history[-20:]:
-            lines.append(f"  {item}")
-    lines.append("Aktuelle Storyboard-Struktur:")
+def _build_storyboard_context_hint(storyboard: StoryboardJson, current_scene_id: str | None = None) -> str:
+    """Kompakter Kontext-String: nur Master-Prompt + Szenen-Überschriften.
+
+    Body/speaker_notes werden NICHT mitgeschickt – die KI soll nur wissen
+    welche Szenen existieren und wie sie heißen, nicht deren vollen Text.
+    """
+    master = storyboard.metadata.get("ai_master_context", {})
+    master_prompt = ""
+    if isinstance(master, dict):
+        master_prompt = str(master.get("master_prompt", ""))
+    elif isinstance(master, str):
+        master_prompt = master
+
+    lines: list[str] = ["Storyboard-Kontext (kompakt):"]
+    if master_prompt:
+        lines.append(f"  Master-Prompt: {master_prompt[:300]}")
+    lines.append(f"  Gesamt-Szenen: {len(storyboard.scenes)}")
+    lines.append("  Szenen-Übersicht (nur Überschriften):")
     for idx, scene in enumerate(storyboard.scenes, 1):
-        text_bits = []
-        for lang, panel in scene.texts.items():
-            text_bits.append(
-                f"{lang}: heading={panel.heading!r}; body={panel.body!r}; "
-                f"speaker_notes={panel.speaker_notes!r}"
-            )
+        marker = " ← DIESE SZENE WIRD JETZT NEU GESCHRIEBEN" if scene.scene_id == current_scene_id else ""
+        first_heading = ""
+        for panel in scene.texts.values():
+            if panel.heading:
+                first_heading = panel.heading[:80]
+                break
         lines.append(
-            f"  Szene {idx} ({scene.scene_id}): frames={scene.image_group}; "
-            f"duration={scene.duration_seconds:.1f}s; texts={' | '.join(text_bits)}"
+            f"    {idx}. {scene.scene_id} ({scene.duration_seconds:.0f}s,"
+            f" {len(scene.image_group)} Bild(er)): {first_heading!r}{marker}"
         )
     return "\n".join(lines)
 
@@ -530,9 +554,28 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
         await _send(job_id, "progress", "analyze", "Speichere Storyboard...", 90)
         _storyboard_svc.save(storyboard)
 
+        # ── KI-Session für dieses Storyboard anlegen / zurücksetzen ──────────
+        session = session_store.start(
+            video_id=video_id,
+            master_prompt=master_prompt,
+            languages=req.languages,
+            provider=provider_name,
+            model=model_name,
+        )
+        for scene in storyboard.scenes:
+            heading = next(
+                (p.heading for p in scene.texts.values() if p.heading), ""
+            )
+            session.update_scene_heading(scene.scene_id, heading)
+        session.add_event("analyze", None, provider_name, model_name,
+                          change_summary=f"{len(storyboard.scenes)} Szenen erkannt")
+
         await _send(job_id, "completed", "analyze", f"{len(storyboard.scenes)} Szenen erkannt.", 100,
-                    {"scenes": len(storyboard.scenes), "video_id": video_id})
+                    {"scenes": len(storyboard.scenes), "video_id": video_id,
+                     "session_started": True})
     except Exception as exc:
+        tb = traceback.format_exc()
+        logger.error("analyze job=%s error=%s\n%s", job_id, exc, tb)
         if _is_throttle_error(exc):
             pname = req.ai_provider.value if req.ai_provider else (settings.ai_providers[0] if settings.ai_providers else AiProvider.GEMINI.value)
             mname = _get_effective_model(pname, req.ai_model)
@@ -540,7 +583,7 @@ async def _run_analyze(video_id: str, job_id: str, req: AnalyzeRequest) -> None:
                 "Timeout oder Überlastung – bitte wähle ein alternatives Modell.", 0,
                 {"alternatives": _throttle_alternatives(pname, mname)})
         else:
-            await _send(job_id, "error", "analyze", str(exc))
+            await _send(job_id, "error", "analyze", f"{type(exc).__name__}: {exc}")
 
 
 @router.post("/videos/{video_id}/analyze", response_model=JobStartResponse)
@@ -567,7 +610,188 @@ async def update_storyboard(video_id: str, body: StoryboardUpdateRequest) -> Sto
     storyboard = body.storyboard
     storyboard.video_id = video_id   # sicherstellen dass video_id konsistent ist
     _storyboard_svc.save(storyboard)
+    # Session-Szenenüberschriften synchronisieren wenn Storyboard manuell gespeichert wird
+    ki_session = session_store.get(video_id)
+    if ki_session:
+        for scene in storyboard.scenes:
+            h = next((p.heading for p in scene.texts.values() if p.heading), "")
+            ki_session.update_scene_heading(scene.scene_id, h)
     return storyboard
+
+
+@router.get("/videos/{video_id}/ki-session")
+async def get_ki_session(video_id: str) -> dict:
+    """Gibt die aktuelle KI-Session für dieses Storyboard zurück (Debug/Übersicht)."""
+    session = session_store.get(video_id)
+    if not session:
+        return {"exists": False, "video_id": video_id}
+    return {"exists": True, **session.to_dict()}
+
+
+@router.delete("/videos/{video_id}/ki-session")
+async def reset_ki_session(video_id: str) -> dict:
+    """Setzt die KI-Session zurück (neuer Storyboard-Vorgang)."""
+    session_store.delete(video_id)
+    return {"deleted": True, "video_id": video_id}
+
+
+def _get_provider_by_name(provider_name: str, model: str | None):
+    """Gibt den passenden KI-Provider anhand von provider_name und model zurück."""
+    if provider_name == AiProvider.GEMINI.value:
+        from app.services.gemini_provider import GeminiProvider
+        return GeminiProvider(model=model)
+    elif provider_name == AiProvider.OPENAI.value:
+        from app.services.openai_provider import OpenAiProvider
+        return OpenAiProvider(model=model)
+    elif provider_name == AiProvider.AZURE_OPENAI.value:
+        from app.services.azure_openai_provider import AzureOpenAiProvider
+        return AzureOpenAiProvider(model=model)
+    elif provider_name == AiProvider.AZURE_COGNITIVE.value:
+        from app.services.azure_cognitive_provider import AzureCognitiveProvider
+        return AzureCognitiveProvider(model=model)
+    else:
+        raise ValueError(f"Unbekannter AI-Provider: {provider_name}")
+
+
+async def _run_chat(video_id: str, job_id: str, req: ChatRequest) -> None:
+    loop = asyncio.get_event_loop()
+    try:
+        await _send(job_id, "progress", "chat", "Lade Storyboard-Kontext...", 10)
+
+        # Provider bestimmen
+        _pname = req.ai_provider.value if req.ai_provider else settings.ai_provider
+        _mname = _get_effective_model(_pname, req.ai_model)
+        provider = _get_provider_by_name(_pname, req.ai_model)
+
+        # KI-Session laden
+        ki_session = session_store.get_or_create(
+            video_id=video_id,
+            master_prompt="",
+            languages=req.languages,
+            provider=_pname,
+            model=_mname,
+        )
+
+        # Storyboard laden für vollständigen Szenen-Kontext
+        storyboard: StoryboardJson | None = None
+        if _storyboard_svc.exists(video_id):
+            storyboard = _storyboard_svc.load(video_id)
+            # Session-Überschriften aktualisieren
+            for scene in storyboard.scenes:
+                h = next((p.heading for p in scene.texts.values() if p.heading), "")
+                ki_session.update_scene_heading(scene.scene_id, h)
+
+        # Stil-Vorgaben
+        style_instruction = "\n".join([
+            _ADDRESS_HINTS.get(req.address_style, _ADDRESS_HINTS["sie"]),
+            _STYLE_HINTS.get(req.writing_style, _STYLE_HINTS["sachlich"]),
+            _DETAIL_HINTS.get(req.detail_level, _DETAIL_HINTS["standard"]),
+        ])
+
+        # Storyboard-Struktur mit vollen Texten für Chat-Kontext
+        sb_lines: list[str] = []
+        if storyboard:
+            for idx, scene in enumerate(storyboard.scenes, 1):
+                sb_lines.append(
+                    f"Szene {idx} ({scene.scene_id}, {len(scene.image_group)} Bild(er), {scene.duration_seconds:.0f}s):"
+                )
+                for lang, panel in scene.texts.items():
+                    sb_lines.append(f"  [{lang.upper()}] heading: {panel.heading!r}")
+                    if panel.body:
+                        sb_lines.append(f"  [{lang.upper()}] body: {panel.body[:300]!r}")
+                    if panel.speaker_notes:
+                        sb_lines.append(f"  [{lang.upper()}] speaker_notes: {panel.speaker_notes[:300]!r}")
+        sb_text = "\n".join(sb_lines) if sb_lines else "(Kein Storyboard vorhanden)"
+
+        # Chat-History aus Session (letzte 20 Einträge)
+        history_lines: list[str] = []
+        for msg in ki_session.chat_history[-20:]:
+            role_label = "Nutzer" if msg["role"] == "user" else "Assistent"
+            history_lines.append(f"{role_label} [{msg['ts']}]: {msg['content']}")
+        history_text = "\n".join(history_lines)
+
+        # Vollständiger Prompt
+        system_block = "\n\n".join(filter(None, [
+            "Du bist ein KI-Assistent für ein Tutorial-Storyboard. "
+            "Du bist ein beratender Assistent für Tutorial-Storyboards. "
+            "Du DARFST Szenen-Texte (heading, body, speaker_notes) NUR DANN ändern, "
+            "wenn der Nutzer das EXPLIZIT fordert – z. B. durch Wörter wie: "
+            "'schreibe', 'ändere', 'passe an', 'setze um', 'erstelle', 'formuliere', 'überarbeite', 'aktualisiere', 'mach'. "
+            "Bei Fragen, Feedback, Diskussion oder Vorschlägen antwortest du NUR mit Text – updates bleibt leer.",
+            f"Stil-Vorgaben (diese gelten für ALLE generierten Texte):\n{style_instruction}",
+            f"KI-Session-Kontext:\n{ki_session.context_summary()}",
+            f"Vollständiges Storyboard:\n{sb_text}",
+            (f"Bisheriger Chat-Verlauf:\n{history_text}") if history_text else "",
+            (
+                "Antworte IMMER als gültiges JSON-Objekt (kein Markdown, keine Erklärungen drumherum):\n"
+                '{"reply": "Deine Antwort an den Nutzer", "updates": ['
+                '{"scene_id": "scene_001", "lang": "de", "field": "speaker_notes", "value": "neuer Text"}'
+                ']}\n'
+                "WICHTIG: updates = [] wenn der Nutzer NICHT explizit nach Umsetzung/Schreiben/Ändern fragt. "
+                "Nur bei klarer Aufforderung zur Umsetzung darf updates befüllt werden. "
+                "Erlaubte fields: heading, body, speaker_notes. "
+                "Szenen-IDs: " + ", ".join(s.scene_id for s in storyboard.scenes) if storyboard else
+                "Antworte IMMER als gültiges JSON: {\"reply\": \"...\", \"updates\": []}"
+            ),
+        ]))
+
+        full_prompt = f"{system_block}\n\nNutzer: {req.message}"
+
+        await _send(job_id, "progress", "chat", f"KI ({_pname}/{_mname}) denkt...", 40)
+        await _send(job_id, "debug", "chat-prompt", f"Prompt-Länge: {len(full_prompt)} Zeichen")
+
+        raw_response: str = await loop.run_in_executor(None, provider.complete_text, full_prompt)
+
+        await _send(job_id, "progress", "chat", "Antwort verarbeiten...", 85)
+
+        # JSON parsen
+        reply = raw_response.strip()
+        updates: list[dict] = []
+        try:
+            # JSON-Block aus Markdown-Fence extrahieren falls vorhanden
+            import re as _re
+            json_match = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", reply, _re.DOTALL)
+            json_str = json_match.group(1) if json_match else reply
+            # Äußerste {} finden falls kein Fence
+            if not json_match:
+                start = reply.find("{")
+                end = reply.rfind("}") + 1
+                if start >= 0 and end > start:
+                    json_str = reply[start:end]
+            import json as _json
+            parsed = _json.loads(json_str)
+            reply = str(parsed.get("reply", reply))
+            updates = parsed.get("updates", [])
+            # Validierung: nur erlaubte fields
+            valid_fields = {"heading", "body", "speaker_notes"}
+            updates = [u for u in updates if isinstance(u, dict) and u.get("field") in valid_fields]
+        except Exception as parse_exc:
+            logger.warning("Chat JSON parse Fehler: %s – sende Rohtext", parse_exc)
+            updates = []
+
+        # Session aktualisieren
+        ki_session.add_chat_message("user", req.message)
+        ki_session.add_chat_message("assistant", reply)
+        ki_session.add_event("chat", None, _pname, _mname, change_summary=req.message[:100])
+
+        await _send(job_id, "completed", "chat", "Fertig", 100, data={"reply": reply, "updates": updates})
+
+    except Exception as exc:
+        logger.error("Chat Fehler für %s: %s", video_id, traceback.format_exc())
+        await _send(job_id, "error", "chat", f"{type(exc).__name__}: {exc}")
+
+
+@router.post("/videos/{video_id}/chat", response_model=JobStartResponse)
+async def chat_with_storyboard(
+    video_id: str,
+    req: ChatRequest,
+    background_tasks: BackgroundTasks,
+) -> JobStartResponse:
+    """Interaktiver Chat-Assistent für das Storyboard. Aktualisiert Szenen-Texte direkt."""
+    job_id = str(uuid.uuid4())
+    job_store.create_queue(job_id)
+    background_tasks.add_task(_run_chat, video_id, job_id, req)
+    return JobStartResponse(job_id=job_id, video_id=video_id)
 
 
 async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneRequest) -> None:
@@ -658,21 +882,6 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
                 f"Halte heading und body ebenfalls praegnant und zum Umfang passend."
             )
 
-        _ADDRESS_HINTS = {
-            "du": "Verwende in heading, body und speaker_notes durchgehend die Du-Form ('du', 'dein').",
-            "sie": "Verwende in heading, body und speaker_notes durchgehend die Sie-Form ('Sie', 'Ihr').",
-            "neutral": "Schreibe unpersoenlich ohne direkte Ansprache (kein 'du', kein 'Sie'). Verwende Infinitivkonstruktionen oder sachliche Beschreibungen.",
-        }
-        _STYLE_HINTS = {
-            "sachlich": "Schreibstil: sachlich und praezise. Vollstaendige Saetze, klare Struktur, keine Umgangssprache.",
-            "leicht_verstaendlich": "Schreibstil: leicht verstaendlich. Kurze Saetze, einfache Woerter, aktive Formulierungen.",
-            "technisch_detailliert": "Schreibstil: technisch detailliert. Fachterminologie verwenden, Ablaeufe praezise beschreiben.",
-        }
-        _DETAIL_HINTS = {
-            "kurz": "Detailtiefe: kurz. heading maximal 6 Woerter, body maximal 2 Saetze, speaker_notes maximal 3 Saetze.",
-            "standard": "Detailtiefe: standard. Ausgewogene Laenge fuer heading, body und speaker_notes.",
-            "ausfuehrlich": "Detailtiefe: ausfuehrlich. Erklaere heading, body und speaker_notes umfassend auf Basis der Bilder und vorhandenen Texte. Keine erfundenen Fakten.",
-        }
         style_hint = "\n".join([
             "Stil-Vorgaben fuer diese Szene:",
             _ADDRESS_HINTS.get(req.address_style, _ADDRESS_HINTS["sie"]),
@@ -680,13 +889,36 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
             _DETAIL_HINTS.get(req.detail_level, _DETAIL_HINTS["standard"]),
         ])
 
+        _pname = req.ai_provider.value if req.ai_provider else settings.ai_provider
+        _mname = _get_effective_model(_pname, req.ai_model)
+
+        # ── KI-Session: Kontext abrufen oder neu erstellen ─────────────────────
+        ki_session = session_store.get_or_create(
+            video_id=video_id,
+            master_prompt=str(
+                persisted_storyboard.metadata.get("ai_master_context", {}).get("master_prompt", "")
+                if isinstance(persisted_storyboard.metadata.get("ai_master_context"), dict) else ""
+            ) if persisted_storyboard else "",
+            languages=req.languages,
+            provider=_pname,
+            model=_mname,
+        )
+        # Aktuellen Szenen-Stand aus dem persisted Storyboard in die Session einpflegen
+        if persisted_storyboard:
+            for scene in persisted_storyboard.scenes:
+                h = next((p.heading for p in scene.texts.values() if p.heading), "")
+                ki_session.update_scene_heading(scene.scene_id, h)
+
+        session_context_hint = ki_session.context_summary()
+
         prompt_extra = "\n\n".join(filter(None, [
             f"Hinweis: Diese Frames gehoeren alle zu EINER zusammenhaengenden Szene. "
             f"Erstelle genau eine Szene mit scene_id '{req.scene_id}'.",
-            _build_storyboard_context_hint(persisted_storyboard) if persisted_storyboard else "",
+            # Kompakter Storyboard-Kontext (nur Überschriften, kein Body/speaker_notes)
+            _build_storyboard_context_hint(persisted_storyboard, req.scene_id) if persisted_storyboard else "",
+            # KI-Session-Kontext (letzte Aktionen, Master-Prompt)
+            session_context_hint,
             "Aktuelle Aenderung:\n" + req.change_summary if req.change_summary else "",
-            "Aktueller vom Client uebergebener Gesamtzustand:\n" + str(req.storyboard_context)
-            if req.storyboard_context else "",
             frame_order_hint,
             duration_hint,
             image_prompt_hint,
@@ -694,9 +926,6 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
             style_hint,
         ]))
 
-        # Debug-Event: Prompt-Details an den Client senden
-        _pname = req.ai_provider.value if req.ai_provider else settings.ai_provider
-        _mname = _get_effective_model(_pname, req.ai_model)
         await _send(job_id, "debug", "rewrite",
                     f"Provider: {_pname} / {_mname}\n"
                     f"Szene: {req.scene_id}\n"
@@ -724,6 +953,17 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
 
         scene_texts = storyboard.scenes[0].texts
         scene_duration = storyboard.scenes[0].duration_seconds
+
+        # ── Session aktualisieren ─────────────────────────────────────────────
+        new_heading = next((t.heading for t in scene_texts.values() if t.heading), "")
+        ki_session.update_scene_heading(req.scene_id, new_heading)
+        ki_session.add_event(
+            "rewrite", req.scene_id, _pname, _mname,
+            change_summary=req.change_summary,
+            scene_heading=new_heading,
+        )
+        ki_session.last_prompt_extra = prompt_extra
+
         await _send(job_id, "completed", "rewrite", "Szene erfolgreich neu geschrieben.", 100, {
             "texts": {lang: t.model_dump() for lang, t in scene_texts.items()},
             "scene_id": req.scene_id,
@@ -731,6 +971,8 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
             "metadata": persisted_storyboard.metadata if persisted_storyboard else {},
         })
     except Exception as exc:
+        tb = traceback.format_exc()
+        logger.error("rewrite_scene job=%s error=%s\n%s", job_id, exc, tb)
         if _is_throttle_error(exc):
             pname = req.ai_provider.value if req.ai_provider else (settings.ai_providers[0] if settings.ai_providers else AiProvider.GEMINI.value)
             mname = _get_effective_model(pname, req.ai_model)
@@ -738,7 +980,7 @@ async def _run_rewrite_scene(video_id: str, job_id: str, req: RewriteSceneReques
                 "Timeout oder Überlastung – bitte wähle ein alternatives Modell.", 0,
                 {"alternatives": _throttle_alternatives(pname, mname)})
         else:
-            await _send(job_id, "error", "rewrite", str(exc))
+            await _send(job_id, "error", "rewrite", f"{type(exc).__name__}: {exc}")
 
 
 @router.post("/videos/{video_id}/rewrite-scene", response_model=JobStartResponse)

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 
 interface DebugInfo {
   app: {
@@ -31,6 +31,13 @@ interface DebugInfo {
   logs: string[];
 }
 
+interface LogResult {
+  lines: string[];
+  path: string;
+  exists: boolean;
+  total: number;
+}
+
 interface Props {
   onClose: () => void;
 }
@@ -41,6 +48,10 @@ export default function DebugPanel({ onClose }: Props): React.ReactElement {
   const [cacheResults, setCacheResults] = useState<string[] | null>(null);
   const [clearingCache, setClearingCache] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [logResult, setLogResult] = useState<LogResult | null>(null);
+  const [loadingLog, setLoadingLog] = useState(false);
+  const [logFilter, setLogFilter] = useState("");
+  const logEndRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -59,6 +70,24 @@ export default function DebugPanel({ onClose }: Props): React.ReactElement {
       setLoading(false);
     }
   }, []);
+
+  const loadLog = useCallback(async () => {
+    setLoadingLog(true);
+    try {
+      const result = await (window as any).debugAPI?.readLog(300);
+      setLogResult(result ?? { lines: [], path: "", exists: false, total: 0 });
+    } catch (e: unknown) {
+      setLogResult({ lines: [`Fehler: ${e instanceof Error ? e.message : String(e)}`], path: "", exists: false, total: 0 });
+    } finally {
+      setLoadingLog(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (logResult) {
+      logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logResult]);
 
   const clearCache = useCallback(async () => {
     setClearingCache(true);
@@ -110,11 +139,14 @@ export default function DebugPanel({ onClose }: Props): React.ReactElement {
           >
             {clearingCache ? "Lösche…" : "Cache & tmp leeren"}
           </button>
+          <button type="button" style={s.btnSecondary} onClick={loadLog} disabled={loadingLog}>
+            {loadingLog ? "Lade Logs…" : "Backend-Log lesen"}
+          </button>
           {info?.paths.logDir && (
-            <button style={s.btnSecondary}
+            <button type="button" style={s.btnSecondary}
               onClick={() => (window as any).debugAPI?.openLogDir()}
             >
-              Logs öffnen
+              Log-Ordner
             </button>
           )}
           {info?.paths.envExists && (
@@ -243,16 +275,52 @@ export default function DebugPanel({ onClose }: Props): React.ReactElement {
                 )}
               </div>
 
-              {/* Log-Dateien */}
-              {info.logs.length > 0 && (
-                <div style={s.section}>
-                  <div style={s.sectionTitle}>Letzte Log-Dateien</div>
-                  {info.logs.map((f) => (
-                    <div key={f} style={s.logEntry}>{f}</div>
-                  ))}
-                </div>
-              )}
             </>
+          )}
+
+          {/* Backend-Log-Viewer */}
+          {logResult && (
+            <div style={s.section}>
+              <div style={s.sectionTitle}>
+                Backend-Log
+                <span style={s.logMeta}>
+                  {logResult.exists
+                    ? `${logResult.lines.length} / ${logResult.total} Zeilen · ${logResult.path}`
+                    : `Datei nicht gefunden: ${logResult.path}`}
+                </span>
+              </div>
+              {logResult.exists && (
+                <input
+                  type="text"
+                  placeholder="Filter (Regex, z.B. ERROR|Gemini|timeout)…"
+                  value={logFilter}
+                  onChange={(e) => setLogFilter(e.target.value)}
+                  style={s.logFilterInput}
+                />
+              )}
+              <div style={s.logViewer}>
+                {logResult.lines.length === 0 && (
+                  <div style={s.logEmpty}>
+                    {logResult.exists ? "Log ist leer." : "Noch keine Log-Datei — Backend starten."}
+                  </div>
+                )}
+                {logResult.lines
+                  .filter((l) => {
+                    if (!logFilter) return true;
+                    try { return new RegExp(logFilter, "i").test(l); } catch { return l.toLowerCase().includes(logFilter.toLowerCase()); }
+                  })
+                  .map((line, i) => {
+                    const isError = /ERROR|CRITICAL|Traceback|Exception|Fehler/i.test(line);
+                    const isWarn  = /WARNING|WARN|warn/i.test(line);
+                    const isInfo  = /INFO|startup|started|uvicorn/i.test(line);
+                    const style   = isError ? s.logLineError : isWarn ? s.logLineWarn : isInfo ? s.logLineInfo : s.logLine;
+                    return (
+                      <div key={i} style={style}>{line}</div>
+                    );
+                  })}
+                <div ref={logEndRef} />
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -432,5 +500,59 @@ const s: Record<string, React.CSSProperties> = {
     color: "#aaa",
     paddingLeft: 210,
     marginBottom: 2,
+  },
+  logMeta: {
+    fontSize: 10,
+    color: "#555",
+    fontWeight: 400,
+    marginLeft: 8,
+  },
+  logFilterInput: {
+    width: "100%",
+    background: "#0d1a2e",
+    border: "1px solid #2a3a5c",
+    borderRadius: 5,
+    padding: "4px 10px",
+    color: "#90caf9",
+    fontSize: 12,
+    fontFamily: "monospace",
+    outline: "none",
+    marginBottom: 6,
+    boxSizing: "border-box" as const,
+  },
+  logViewer: {
+    background: "#08111e",
+    border: "1px solid #1e2a45",
+    borderRadius: 6,
+    padding: "8px 10px",
+    maxHeight: 380,
+    overflowY: "auto" as const,
+    fontFamily: "monospace",
+    fontSize: 11,
+    lineHeight: 1.55,
+  },
+  logEmpty: {
+    color: "#555",
+    padding: 8,
+  },
+  logLine: {
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-all" as const,
+    color: "#aaa",
+  },
+  logLineError: {
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-all" as const,
+    color: "#ef9a9a",
+  },
+  logLineWarn: {
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-all" as const,
+    color: "#ffcc80",
+  },
+  logLineInfo: {
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-all" as const,
+    color: "#90caf9",
   },
 };

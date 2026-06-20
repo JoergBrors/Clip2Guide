@@ -389,6 +389,22 @@ export function registerAll(ipcMain: IpcMain): void {
     await shell.openPath(logDir);
   });
 
+  /** Liest die letzten N Zeilen der Backend-Log-Datei. */
+  ipcMain.handle("debug:read-log", (_event, lines: number = 300) => {
+    const logPath = path.join(USER_LOCAL_DIR, "workspace", "logs", "backend.log");
+    if (!fs.existsSync(logPath)) return { lines: [], path: logPath, exists: false, total: 0 };
+    try {
+      const content = fs.readFileSync(logPath, "utf8");
+      const all = content.split(/\r?\n/).filter(Boolean);
+      return { lines: all.slice(-lines), path: logPath, exists: true, total: all.length };
+    } catch (e: unknown) {
+      return {
+        lines: [`Fehler beim Lesen: ${e instanceof Error ? e.message : String(e)}`],
+        path: logPath, exists: true, total: 0,
+      };
+    }
+  });
+
   /** Öffnet die .env-Datei im Standard-Texteditor. */
   ipcMain.handle("debug:open-env-file", async () => {
     if (fs.existsSync(USER_ENV_FILE)) {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   StoryboardJson,
@@ -10,6 +10,161 @@ import {
   StoryboardDraftHints,
 } from "../api/backendClient";
 import JsonPreview from "./JsonPreview";
+import ChatFloatPanel from "./ChatFloatPanel";
+
+// ── Schwebendes Debug-Floating-Panel ─────────────────────────────────────────
+
+interface DebugLog { ts: string; step: string; content: string; }
+
+function DebugFloatPanel({
+  debugLogs, analyzePromptPreview, onClear, onClose,
+}: {
+  debugLogs: DebugLog[];
+  analyzePromptPreview: string;
+  onClear: () => void;
+  onClose: () => void;
+}): React.ReactElement {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const dragStart = useRef<{ mx: number; my: number; px: number; py: number } | null>(null);
+  const [pos, setPos] = useState({ x: window.innerWidth - 660, y: 60 });
+  const [filter, setFilter] = useState("");
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [debugLogs]);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    dragStart.current = { mx: e.clientX, my: e.clientY, px: pos.x, py: pos.y };
+    e.preventDefault();
+  }, [pos]);
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!dragStart.current) return;
+      setPos({
+        x: dragStart.current.px + e.clientX - dragStart.current.mx,
+        y: dragStart.current.py + e.clientY - dragStart.current.my,
+      });
+    }
+    function onUp() { dragStart.current = null; }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, []);
+
+  const filteredLogs = filter
+    ? debugLogs.filter((l) => {
+        try { return new RegExp(filter, "i").test(l.content) || new RegExp(filter, "i").test(l.step); }
+        catch { return l.content.toLowerCase().includes(filter.toLowerCase()); }
+      })
+    : debugLogs;
+
+  return (
+    <div
+      ref={panelRef}
+      style={{
+        position: "fixed",
+        left: Math.max(0, pos.x),
+        top: Math.max(0, pos.y),
+        width: 620,
+        maxHeight: "80vh",
+        background: "#080d14",
+        border: "1px solid #1565c0",
+        borderRadius: 10,
+        boxShadow: "0 8px 40px rgba(0,0,0,0.8)",
+        zIndex: 1200,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
+      {/* Titelleiste – Drag-Handle */}
+      <div
+        onMouseDown={onMouseDown}
+        style={{
+          display: "flex", alignItems: "center", gap: 10,
+          padding: "8px 12px", background: "#0d1a30",
+          borderBottom: "1px solid #1565c0", cursor: "grab", userSelect: "none", flexShrink: 0,
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#4fc3f7" }}>
+          🔍 KI-Debug
+          {debugLogs.length > 0 && (
+            <span style={{ marginLeft: 6, fontSize: 10, background: "#1565c0", borderRadius: 8, padding: "1px 6px" }}>
+              {debugLogs.length}
+            </span>
+          )}
+        </span>
+        <input
+          type="text"
+          placeholder="Filter…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            flex: 1, background: "#0d2040", border: "1px solid #1a3a6a",
+            borderRadius: 4, padding: "2px 8px", color: "#90caf9",
+            fontSize: 11, fontFamily: "monospace", outline: "none",
+          }}
+        />
+        <button
+          type="button"
+          onClick={onClear}
+          style={{ fontSize: 10, padding: "2px 8px", background: "transparent", border: "1px solid #333", borderRadius: 4, color: "#888", cursor: "pointer" }}
+        >
+          Leeren
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{ fontSize: 14, padding: "0 6px", background: "transparent", border: "none", color: "#aaa", cursor: "pointer", lineHeight: 1 }}
+        >
+          ✕
+        </button>
+      </div>
+
+      {/* Scroll-Bereich */}
+      <div style={{ overflowY: "auto", flex: 1, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+        {/* Analyse-Vorschau */}
+        {analyzePromptPreview && (
+          <div style={{ background: "#0d1520", borderRadius: 6, padding: "8px 10px", border: "1px solid #1a3050" }}>
+            <div style={{ fontSize: 10, background: "#0d2a4a", color: "#4fc3f7", borderRadius: 3, padding: "0 5px", display: "inline-block", marginBottom: 4 }}>
+              analyse-preview
+            </div>
+            <pre style={{ margin: 0, fontSize: 10, color: "#90b4c8", fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 200, overflowY: "auto", background: "#050a10", borderRadius: 4, padding: "4px 6px" }}>
+              {analyzePromptPreview}
+            </pre>
+          </div>
+        )}
+
+        {filteredLogs.length === 0 && (
+          <p style={{ color: "#445", fontSize: 11, textAlign: "center", margin: "12px 0" }}>
+            {debugLogs.length === 0
+              ? "Noch keine KI-Anfragen – starte Analyse oder Rewrite."
+              : `Kein Ergebnis für Filter „${filter}".`}
+          </p>
+        )}
+
+        {[...filteredLogs].reverse().map((log, i) => (
+          <div key={i} style={{ background: "#0d1520", borderRadius: 6, padding: "8px 10px", border: "1px solid #1a3050" }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 3, alignItems: "baseline" }}>
+              <span style={{ fontSize: 9, color: "#445", fontFamily: "monospace", flexShrink: 0 }}>{log.ts}</span>
+              <span style={{ fontSize: 10, background: log.step.includes("error") ? "#3a0d0d" : "#0d2a4a", color: log.step.includes("error") ? "#ef9a9a" : "#4fc3f7", borderRadius: 3, padding: "0 5px", flexShrink: 0 }}>{log.step}</span>
+            </div>
+            <pre style={{ margin: 0, fontSize: 10, color: "#90b4c8", fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 220, overflowY: "auto", background: "#050a10", borderRadius: 4, padding: "4px 6px" }}>
+              {log.content}
+            </pre>
+          </div>
+        ))}
+        <div ref={logEndRef} />
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface Props {
   videoId: string;
@@ -43,6 +198,7 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
   // Debug-Protokoll (KI-Prompts)
   const [debugLogs, setDebugLogs] = useState<Array<{ ts: string; step: string; content: string }>>([]);
   const [showDebug, setShowDebug] = useState(false);
+  const [showChat, setShowChat] = useState(false);
 
   function addDebugLog(step: string, content: string) {
     setDebugLogs((prev) => [...prev.slice(-199), { ts: new Date().toLocaleTimeString(), step, content }]);
@@ -129,65 +285,6 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
     const memory = { ...((sb.metadata?.image_prompt_memory as Record<string, string> | undefined) ?? {}) };
     if (prompt.trim()) memory[filename] = prompt;
     return { ...sb, metadata: { ...sb.metadata, image_prompt_memory: memory } };
-  }
-
-  function describeSceneForContext(scene: Scene): string {
-    const textDescriptions = Object.entries(scene.texts ?? {})
-      .map(([lang, panel]) => {
-        const parts = [
-          panel.heading ? `Ueberschrift: ${panel.heading}` : "",
-          panel.body ? `Beschreibung: ${panel.body}` : "",
-          panel.speaker_notes ? `Sprecher-Notizen: ${panel.speaker_notes}` : "",
-        ].filter(Boolean);
-        return parts.length ? `${lang}: ${parts.join(" | ")}` : "";
-      })
-      .filter(Boolean);
-    return textDescriptions.join("\n");
-  }
-
-  function buildUpdatedMasterContext(sb: StoryboardJson): Record<string, unknown> | null {
-    const master = sb.metadata?.ai_master_context;
-    if (!master || typeof master !== "object" || Array.isArray(master)) return null;
-    const masterContext = { ...(master as Record<string, unknown>) };
-    const originalSceneGroups = Array.isArray(masterContext.scene_groups)
-      ? masterContext.scene_groups
-      : [];
-    masterContext.scene_groups = sb.scenes.map((scene, idx) => {
-      const original = originalSceneGroups[idx];
-      const originalGroup = original && typeof original === "object" && !Array.isArray(original)
-        ? original as Record<string, unknown>
-        : {};
-      const currentDescription = describeSceneForContext(scene);
-      return {
-        ...originalGroup,
-        scene_index: idx,
-        scene_id: scene.scene_id,
-        description: currentDescription || String(originalGroup.description ?? ""),
-        frames: scene.image_group,
-        image_prompts: scene.image_prompts,
-        duration_seconds: scene.duration_seconds,
-      };
-    });
-    masterContext.current_scene_count = sb.scenes.length;
-    masterContext.last_client_update = "Master-Kontext wurde vor dem Szenen-Rewrite aus dem aktuellen Storyboard aktualisiert.";
-    return masterContext;
-  }
-
-  function buildRewriteContext(sb: StoryboardJson): Record<string, unknown> {
-    const masterContext = buildUpdatedMasterContext(sb);
-    return {
-      master_context: masterContext ?? sb.metadata?.ai_master_context ?? null,
-      change_history: sb.metadata?.ai_change_history ?? [],
-      scenes: sb.scenes.map((scene, idx) => ({
-        index: idx + 1,
-        scene_id: scene.scene_id,
-        scene_description: describeSceneForContext(scene),
-        image_group: scene.image_group,
-        image_prompts: scene.image_prompts,
-        duration_seconds: scene.duration_seconds,
-        texts: scene.texts,
-      })),
-    };
   }
 
   function appendLocalChangeHistory(sb: StoryboardJson, summary: string): StoryboardJson {
@@ -609,7 +706,7 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
         Object.keys(imagePrompts ?? {}).length ? imagePrompts : undefined,
         activeProvider, activeModel,
         scn.duration_seconds ?? undefined,
-        buildRewriteContext(sb),
+        // storyboard_context entfällt – Backend nutzt KI-Session für Kontext
         changeSummary,
         rewriteAddressStyle,
         rewriteWritingStyle,
@@ -805,6 +902,14 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
             >
               {showDebug ? "🔍 Debug aktiv" : "🔍 Debug"}
               {debugLogs.length > 0 && <span style={{ marginLeft: 4, fontSize: 10, background: "#1565c0", borderRadius: 8, padding: "0 5px" }}>{debugLogs.length}</span>}
+            </button>
+            <button
+              className={`btn ${showChat ? "btn-success" : "btn-ghost"}`}
+              style={{ fontSize: 12 }}
+              onClick={() => setShowChat((v) => !v)}
+              title="KI-Chatbot öffnen"
+            >
+              💬 Chat
             </button>
             <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => setShowJson(!showJson)}>
               {showJson ? "Editor" : "JSON"}
@@ -1367,56 +1472,30 @@ export default function SceneEditor({ videoId, selectedFrames, sceneGroups, draf
         <JsonPreview storyboard={storyboard} onChange={setStoryboard} />
       )}
 
-      {/* Debug-Panel: KI-Prompts */}
+      {/* Debug-Panel: KI-Prompts \u2013 schwebendes Floating-Panel */}
       {showDebug && (
-        <div className="card" style={{ marginTop: 12, background: "#080d14", border: "1px solid #1565c0" }}>
-          <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 12 }}>
-            <span style={{ color: "#4fc3f7", fontWeight: 700, fontSize: 13 }}>
-              \ud83d\udd0d KI-Prompt-Debug ({debugLogs.length} Backend-Eintr\u00e4ge)
-            </span>
-            <button
-              className="btn btn-ghost"
-              style={{ fontSize: 11, padding: "2px 8px", marginLeft: "auto" }}
-              onClick={() => setDebugLogs([])}
-            >
-              Leeren
-            </button>
-          </div>
-          <div style={{ background: "#0d1520", borderRadius: 6, padding: "8px 12px", border: "1px solid #1a3050", marginBottom: 8 }}>
-            <div style={{ fontSize: 11, background: "#0d2a4a", color: "#4fc3f7", borderRadius: 3, padding: "0 6px", display: "inline-block", marginBottom: 5 }}>
-              analyse-preview
-            </div>
-            <pre style={{
-              margin: 0, fontSize: 11, color: "#90b4c8",
-              fontFamily: "'Consolas', 'Courier New', monospace",
-              whiteSpace: "pre-wrap", wordBreak: "break-word",
-              maxHeight: 320, overflowY: "auto",
-              background: "#050a10", borderRadius: 4, padding: "6px 8px",
-            }}>{analyzePromptPreview}</pre>
-          </div>
-          {debugLogs.length === 0 && (
-            <p style={{ color: "#556", fontSize: 12, margin: 0 }}>
-              Noch keine KI-Anfragen aufgezeichnet. Starte eine Analyse oder einen Rewrite.
-            </p>
-          )}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 480, overflowY: "auto" }}>
-            {[...debugLogs].reverse().map((log, i) => (
-              <div key={i} style={{ background: "#0d1520", borderRadius: 6, padding: "8px 12px", border: "1px solid #1a3050" }}>
-                <div style={{ display: "flex", gap: 10, marginBottom: 4, alignItems: "baseline" }}>
-                  <span style={{ fontSize: 10, color: "#556", fontFamily: "monospace", flexShrink: 0 }}>{log.ts}</span>
-                  <span style={{ fontSize: 11, background: "#0d2a4a", color: "#4fc3f7", borderRadius: 3, padding: "0 6px", flexShrink: 0 }}>{log.step}</span>
-                </div>
-                <pre style={{
-                  margin: 0, fontSize: 11, color: "#90b4c8",
-                  fontFamily: "'Consolas', 'Courier New', monospace",
-                  whiteSpace: "pre-wrap", wordBreak: "break-word",
-                  maxHeight: 260, overflowY: "auto",
-                  background: "#050a10", borderRadius: 4, padding: "6px 8px",
-                }}>{log.content}</pre>
-              </div>
-            ))}
-          </div>
-        </div>
+        <DebugFloatPanel
+          debugLogs={debugLogs}
+          analyzePromptPreview={analyzePromptPreview}
+          onClear={() => setDebugLogs([])}
+          onClose={() => setShowDebug(false)}
+        />
+      )}
+
+      {/* Chat-Panel: KI-Assistent \u2013 schwebendes Floating-Panel */}
+      {showChat && storyboard && (
+        <ChatFloatPanel
+          videoId={videoId}
+          storyboard={storyboard}
+          onUpdateStoryboard={setStoryboard}
+          provider={provider}
+          selectedModel={selectedModel}
+          languages={languages}
+          addressStyle={rewriteAddressStyle}
+          writingStyle={rewriteWritingStyle}
+          detailLevel={rewriteDetailLevel}
+          onClose={() => setShowChat(false)}
+        />
       )}
 
       {/* Storyboard-Zusammenfassung vor/nach Analyse */}

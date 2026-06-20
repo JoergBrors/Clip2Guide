@@ -229,12 +229,31 @@ def _render_manual_worker(
         loop.call_soon_threadsafe(q.put_nowait, event)
 
     base = 10 + int(85 * lang_idx / max(total_langs, 1))
+    share = max(1, 85 // max(total_langs, 1))
     push("log", "render", f"[{lang}] Starte Handbuch-Rendering (DOCX)...", base)
     if req.handbook_optimize:
-        push("log", "render", f"[{lang}] Optimiere Handbuchtexte per KI...", base)
-        push("progress", "render", f"[{lang}] Handbuch-KI wird vorbereitet...", base + 10)
+        push("log", "render", f"[{lang}] Optimiere Handbuchtexte per KI (Szene für Szene)...", base)
+        push("progress", "render", f"[{lang}] Handbuch-KI wird vorbereitet...", base + 5)
+
+    import re as _re
 
     def debug_prompt(step: str, content: str) -> None:
+        # manual-status: "Szene X/N ..." → als progress-Event mit Prozentschritt
+        if step == "manual-status":
+            m = _re.search(r"Szene\s+(\d+)/(\d+)", content)
+            if m:
+                cur, tot = int(m.group(1)), int(m.group(2))
+                pct = base + 5 + int(share * 0.85 * (cur - 1) / max(tot, 1))
+                push("progress", "render", f"[{lang}] {content}", min(pct, base + share - 5))
+                return
+        # manual-progress: "Szene X/N fertig ✓" → als progress-Event
+        if step == "manual-progress":
+            m = _re.search(r"Szene\s+(\d+)/(\d+)", content)
+            if m:
+                cur, tot = int(m.group(1)), int(m.group(2))
+                pct = base + 5 + int(share * 0.85 * cur / max(tot, 1))
+                push("progress", "render", f"[{lang}] {content}", min(pct, base + share - 5))
+                return
         push("debug", step, f"[{lang}] {content}", base + 20, {"language": lang})
 
     try:
