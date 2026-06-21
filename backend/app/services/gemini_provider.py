@@ -73,9 +73,7 @@ class GeminiProvider(AiProviderBase):
             response = self._client.models.generate_content(
                 model=self._model_name,
                 contents=[prompt, *parts],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                ),
+                config=self._json_config(),
             )
         except Exception as exc:
             logger.warning("Gemini analyze_frames Fehler: %s", exc)
@@ -85,14 +83,24 @@ class GeminiProvider(AiProviderBase):
         storyboard = parse_storyboard_response(raw_json, video_id, frame_paths, languages)
         return storyboard
 
+    def _json_config(self) -> types.GenerateContentConfig:
+        """Einheitliche Config für alle JSON-Aufrufe: max Output, Thinking-Budget begrenzt."""
+        cfg: dict = {
+            "response_mime_type": "application/json",
+            "max_output_tokens": 65536,
+        }
+        # Gemini 2.5-Modelle unterstützen thinking_config — Budget begrenzen damit
+        # Output-Token-Raum nicht vom Thinking aufgefressen wird.
+        if "2.5" in self._model_name:
+            cfg["thinking_config"] = types.ThinkingConfig(thinking_budget=2048)
+        return types.GenerateContentConfig(**cfg)
+
     def complete_text(self, prompt: str) -> str:
         try:
             response = self._client.models.generate_content(
                 model=self._model_name,
                 contents=[prompt],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                ),
+                config=self._json_config(),
             )
         except Exception as exc:
             logger.warning("Gemini complete_text Fehler: %s", exc)
@@ -109,7 +117,7 @@ class GeminiProvider(AiProviderBase):
             response = self._client.models.generate_content(
                 model=self._model_name,
                 contents=parts,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
+                config=self._json_config(),
             )
         except Exception as exc:
             logger.warning("Gemini complete_text_with_images Fehler: %s", exc)
