@@ -528,14 +528,58 @@ class ManualRenderService:
         end = cleaned.rfind("}") + 1
         if start >= 0 and end > start:
             cleaned = cleaned[start:end]
+
+        # Erster Versuch: direkt parsen
         try:
             data = json.loads(cleaned)
+            if not isinstance(data, dict):
+                raise ValueError("Handbuch-KI-Antwort ist kein JSON-Objekt.")
+            return data
+        except json.JSONDecodeError:
+            pass
+
+        # Zweiter Versuch: ungültige Backslash-Escapes innerhalb von Strings reparieren.
+        # Gemini schreibt manchmal \E, \e, \Z o.ä. als Literal in Texten statt \\ zu verwenden.
+        # Strategie: alle \X ersetzen wo X kein gültiger JSON-Escape-Zeichentyp ist.
+        _VALID_ESCAPES = set('"\\/ bfnrtu')
+
+        def fix_invalid_escapes(s: str) -> str:
+            result: list[str] = []
+            i = 0
+            in_string = False
+            while i < len(s):
+                ch = s[i]
+                if ch == '"' and (i == 0 or s[i - 1] != '\\'):
+                    in_string = not in_string
+                    result.append(ch)
+                    i += 1
+                elif in_string and ch == '\\' and i + 1 < len(s):
+                    next_ch = s[i + 1]
+                    if next_ch in _VALID_ESCAPES:
+                        result.append(ch)
+                        result.append(next_ch)
+                        i += 2
+                    else:
+                        # Ungültiger Escape: Backslash verdoppeln
+                        result.append('\\\\')
+                        result.append(next_ch)
+                        i += 2
+                else:
+                    result.append(ch)
+                    i += 1
+            return ''.join(result)
+
+        repaired = fix_invalid_escapes(cleaned)
+        try:
+            data = json.loads(repaired)
+            if not isinstance(data, dict):
+                raise ValueError("Handbuch-KI-Antwort ist kein JSON-Objekt.")
+            return data
         except json.JSONDecodeError as exc:
             preview = raw[:300].replace("\n", " ")
-            raise ValueError(f"Handbuch-KI-Antwort ist kein valides JSON. Antwort-Anfang: {preview}") from exc
-        if not isinstance(data, dict):
-            raise ValueError("Handbuch-KI-Antwort ist kein JSON-Objekt.")
-        return data
+            raise ValueError(
+                f"Handbuch-KI-Antwort ist kein valides JSON. Antwort-Anfang: {preview}"
+            ) from exc
 
     def _save_manual_storyboard(
         self,
