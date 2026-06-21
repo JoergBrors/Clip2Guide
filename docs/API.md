@@ -17,7 +17,6 @@ Gibt Betriebsbereitschaft und App-Version zurück.
 ```json
 { "status": "ok", "version": "0.1.0" }
 ```
-
 ---
 
 ## Server-Sent Events (SSE)
@@ -28,12 +27,13 @@ Echtzeit-Fortschritt für lang laufende Operationen.
 Muss *vor* oder gleichzeitig mit dem auslösenden POST geöffnet werden.
 
 **Path-Parameter:**
+
 - `job_id` – UUID des Jobs (entspricht der `video_id` oder `session_id`)
 
 **Response:** `text/event-stream`
 
 **Event-Format:**
-```
+```text
 data: {"type": "progress", "step": "normalize", "message": "...", "percent": 42, "data": null}
 
 data: {"type": "completed", "step": "normalize", "message": "...", "percent": 100, "data": {...}}
@@ -42,14 +42,13 @@ data: {"type": "error", "step": "normalize", "message": "Fehlermeldung", "percen
 
 data: {"type": "log", "step": "auto_editor", "message": "Rohausgabe ...", "percent": 0, "data": null}
 ```
-
 **Keepalive:** `: keepalive` alle 15 Sekunden
 **Timeout:** 3600 Sekunden (dann automatisch `error`-Event)
 
 **Event-Typen:**
 
 | Typ | Bedeutung |
-|---|---|
+| --- | --- |
 | `progress` | Zwischenstand, `percent` 0–99 |
 | `completed` | Job abgeschlossen, `percent` = 100, `data` enthält Ergebnis |
 | `error` | Fehler aufgetreten, Job beendet |
@@ -89,7 +88,6 @@ Maximale Chunk-Größe intern: 1 MB.
   }
 }
 ```
-
 SSE-Events (über `/api/upload/{upload_id}/events`):
 - `progress`: 0–80 % (Datei-Chunks), 88 % (ffprobe-Analyse)
 - `completed`: Upload abgeschlossen
@@ -119,7 +117,6 @@ Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
   "motion_threshold": 0.08
 }
 ```
-
 Alle Felder außer `video_id` sind optional – Defaults aus `.env` werden verwendet.
 
 `edit_mode`-Werte: `audio` | `motion` | `combined`
@@ -128,7 +125,6 @@ Alle Felder außer `video_id` sind optional – Defaults aus `.env` werden verwe
 ```json
 { "job_id": "...", "video_id": "...", "message": "Job gestartet" }
 ```
-
 SSE-Events (über `/api/jobs/{job_id}/events`):
 - `log`: Rohausgabe von Auto-Editor (zeilenweise)
 - `progress`: beinhaltet vor dem Schnitt eine Audio-Decoder-Pruefung; bei `Decoder not found` wird automatisch eine AAC-kompatible Arbeitsdatei erzeugt und der Schnitt einmal wiederholt
@@ -150,7 +146,6 @@ Eingabe: bevorzugt `cut/`, sonst `uploads/`.
 ```json
 { "job_id": "...", "video_id": "...", "message": "Job gestartet" }
 ```
-
 SSE-Events (über `/api/jobs/{job_id}/events`):
 - `progress`: 0–100 %, aus FFmpeg `-progress pipe:1`-Ausgabe (frame-basiert)
 - `completed`: `data.normalized_path`
@@ -172,7 +167,6 @@ Priorität: `cut/` → `normalized/` → `uploads/`.
 ```json
 { "job_id": "...", "video_id": "...", "message": "Frame-Extraktion gestartet" }
 ```
-
 SSE-Events (über `/api/jobs/{job_id}/events`):
 - `progress`: 0–100 %
 - `completed`:
@@ -184,7 +178,6 @@ SSE-Events (über `/api/jobs/{job_id}/events`):
   }
 }
 ```
-
 ---
 
 ### `GET /api/videos/{video_id}/frame-stack`
@@ -216,7 +209,6 @@ Bestehendes Frame-Bild ersetzen, z.B. nach Rotation, Zielformat-Anpassung oder B
 ```json
 { "ok": true, "filename": "frame_001.jpg", "video_id": "..." }
 ```
-
 ---
 
 ### `POST /api/videos/{video_id}/frames/upload`
@@ -246,7 +238,6 @@ Liste aller in `AI_PROVIDER` (.env) konfigurierten KI-Provider.
   "default": "gemini"
 }
 ```
-
 ---
 
 ### `GET /api/ai/models`
@@ -267,7 +258,6 @@ Verfügbare Modelle für einen Provider.
   "default": "gemini-2.5-flash"
 }
 ```
-
 Für Gemini: dynamisch per `client.models.list()` abgerufen.
 Für OpenAI / Azure OpenAI / Azure Cognitive: feste Liste im Code.
 
@@ -296,9 +286,8 @@ Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
   }
 }
 ```
-
 | Feld | Typ | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `video_id` | string | UUID des Videos |
 | `languages` | string[] | Zielsprachen (ISO-639-1), min. eine |
 | `ai_provider` | string\|null | `gemini` \| `openai` \| `azure_openai` \| `azure_cognitive`; null = Default aus .env |
@@ -313,7 +302,6 @@ Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
 ```json
 { "job_id": "...", "video_id": "...", "message": "KI-Analyse gestartet" }
 ```
-
 SSE-Events (über `/api/jobs/{job_id}/events`):
 - `progress`: Analyse-Fortschritt
 - `debug`: Prompt-Details (nur für Debugging-Zwecke)
@@ -340,7 +328,6 @@ Storyboard vollständig überschreiben (nach manuellem Bearbeiten im UI).
   "storyboard": { ...StoryboardJson... }
 }
 ```
-
 **Response** `200 OK` – das gespeicherte `StoryboardJson`
 
 ---
@@ -378,9 +365,8 @@ Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
   "change_summary": "Bild frame_010.jpg wurde zu Szene 3 hinzugefuegt."
 }
 ```
-
 | Feld | Beschreibung |
-|---|---|
+| --- | --- |
 | `scene_id` | ID der Szene (z.B. `scene_003`) |
 | `image_group` | Frames für die Analyse (Reihenfolge wie vom Nutzer festgelegt) |
 | `current_texts` | Optional: Bestehende Texte als Kontext für die KI |
@@ -393,7 +379,6 @@ Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
 ```json
 { "job_id": "...", "video_id": "...", "message": "Szene wird neu analysiert" }
 ```
-
 SSE `completed`:
 ```json
 {
@@ -403,6 +388,57 @@ SSE `completed`:
   }
 }
 ```
+---
+
+### `POST /api/videos/{video_id}/chat`
+
+Interaktiver KI-Assistent für das Storyboard.
+Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
+
+**Body:** `application/json`
+```json
+{
+  "message": "Schreibe die Überschrift von Szene 2 kürzer",
+  "languages": ["de"],
+  "ai_provider": null,
+  "ai_model": null,
+  "address_style": "sie",
+  "writing_style": "sachlich",
+  "detail_level": "standard"
+}
+```
+| Feld | Default | Beschreibung |
+| --- | --- | --- |
+| `message` | — | Nutzer-Nachricht in natürlicher Sprache |
+| `ai_provider` | `null` | Override; null = Session-Provider oder settings-Default |
+| `ai_model` | `null` | Override; null = Session-Modell oder Provider-Default |
+| `address_style` | `sie` | `du` \| `sie` \| `neutral` |
+| `writing_style` | `sachlich` | `sachlich` \| `leicht_verstaendlich` \| `technisch_detailliert` |
+| `detail_level` | `standard` | `kurz` \| `standard` \| `ausfuehrlich` |
+
+**Bildreferenzen:** Enthält die Nachricht Phrasen wie `"Bild 3 aus Szene 2"`, wird der Frame
+automatisch per Vision-API an das Modell geschickt (compress_frame_for_ki, max. 768 px JPEG 40).
+
+**Felder werden NUR geändert** bei expliziten Aktionswörtern:
+`schreibe`, `ändere`, `passe an`, `setze um`, `erstelle`, `formuliere`, `überarbeite`, `aktualisiere`, `mach`.
+Fragen und Diskussionen geben nur `reply` zurück mit `updates: []`.
+
+**Response** `200 OK`
+```json
+{ "job_id": "...", "video_id": "...", "message": "Chat gestartet" }
+```
+SSE `completed`:
+```json
+{
+  "data": {
+    "reply": "Ich habe die Überschrift von Szene 2 gekürzt.",
+    "updates": [
+      { "scene_id": "scene_002", "lang": "de", "field": "heading", "value": "Kürzere Überschrift" }
+    ]
+  }
+}
+```
+Erlaubte `field`-Werte: `heading`, `body`, `speaker_notes`.
 
 ---
 
@@ -421,14 +457,12 @@ Läuft als FastAPI `BackgroundTask`, Fortschritt via SSE.
   "ai_model": null
 }
 ```
-
 `scene_ids` = null → alle Szenen mit `len(image_group) > 1` und leerem `slide_panels`.
 
 **Response** `200 OK`
 ```json
 { "job_id": "...", "video_id": "...", "message": "Anreicherung gestartet" }
 ```
-
 ---
 
 ## Rendering
@@ -454,9 +488,8 @@ Fortschritt via SSE.
   "tts_slow": false
 }
 ```
-
 | Feld | Default | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `languages` | `["de"]` | Sprachen die gerendert werden sollen |
 | `output_formats` | `["video"]` | Ausgabeformate: `video`, `manual` oder beide |
 | `handbook_optimize` | `false` | Optional: KI-Segmentierung fuer das DOCX-Handbuch; `body` wird als Bild-Erklaerung und `speaker_notes` als Textbausteine auf Bilder verteilt, Inhalte werden nicht umgeschrieben, Szenenstruktur bleibt unveraendert |
@@ -474,7 +507,6 @@ Vor dem Render werden die Szenen-Dauern automatisch neu berechnet:
 ```json
 { "job_id": "...", "video_id": "...", "message": "Rendering gestartet" }
 ```
-
 SSE-Events (über `/api/jobs/{job_id}/events`):
 - `progress`: 10–100 %, aus `stdout` von `create_tutorial.py` (Regex-Parsing)
 - `log`: Roh-Stdout-/Stderr-Zeilen
@@ -490,7 +522,6 @@ SSE-Events (über `/api/jobs/{job_id}/events`):
   }
 }
 ```
-
 ---
 
 ### `GET /api/videos/{video_id}/output/{filename}`
@@ -537,7 +568,6 @@ Exportiert den aktuellen Projektstand als ZIP.
   "message": "Projektstand exportiert"
 }
 ```
-
 ### `GET /api/videos/{video_id}/project/{filename}`
 
 Projekt-ZIP herunterladen.
@@ -561,7 +591,6 @@ Projektstand aus ZIP wiederherstellen.
   "message": "Projektstand wiederhergestellt"
 }
 ```
-
 ---
 
 ## Bilder (Bild-Modus)
@@ -583,7 +612,6 @@ Mehrere Screenshots hochladen (Bild-Modus, kein Video).
   ]
 }
 ```
-
 ---
 
 ### `POST /api/images/normalize`
@@ -599,7 +627,6 @@ Hochgeladene Bilder auf einheitliche Größe bringen.
   "target_height": 1080
 }
 ```
-
 `mode`-Werte: `crop` | `fit` | `stretch`
 
 **Response** `200 OK`
@@ -611,7 +638,6 @@ Hochgeladene Bilder auf einheitliche Größe bringen.
   ]
 }
 ```
-
 ---
 
 ### `POST /api/images/{session_id}/to-frames`
@@ -632,7 +658,6 @@ Normalisierte Bilder in einen FrameStack umwandeln (Einstieg in den Video-Workfl
   ]
 }
 ```
-
 Ab diesem Punkt wird die `video_id` für alle weiteren Endpunkte genutzt
 (Storyboard-Generierung, Rendering etc.).
 
@@ -641,15 +666,13 @@ Ab diesem Punkt wird die `video_id` für alle weiteren Endpunkte genutzt
 ## Fehler-Antworten
 
 Alle Endpunkte folgen dem FastAPI-Standard für Fehler:
-
 ```json
 {
   "detail": "Beschreibung des Fehlers"
 }
 ```
-
 | HTTP-Status | Bedeutung |
-|---|---|
+| --- | --- |
 | `400` | Ungültige Anfrage (z.B. falsches Dateiformat) |
 | `404` | Ressource nicht gefunden (z.B. video_id unbekannt) |
 | `429` | Zu viele gleichzeitige Jobs (SSE-Event `throttled`) |

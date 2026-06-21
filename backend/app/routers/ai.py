@@ -658,19 +658,20 @@ async def _run_chat(video_id: str, job_id: str, req: ChatRequest) -> None:
     try:
         await _send(job_id, "progress", "chat", "Lade Storyboard-Kontext...", 10)
 
-        # Provider bestimmen
-        _pname = req.ai_provider.value if req.ai_provider else settings.ai_provider
-        _mname = _get_effective_model(_pname, req.ai_model)
-        provider = _get_provider_by_name(_pname, req.ai_model)
-
-        # KI-Session laden
+        # KI-Session zuerst laden — enthält Provider/Modell aus dem Storyboard-Vorgang
         ki_session = session_store.get_or_create(
             video_id=video_id,
             master_prompt="",
             languages=req.languages,
-            provider=_pname,
-            model=_mname,
+            provider=settings.ai_provider,
+            model="",
         )
+
+        # Provider bestimmen: expliziter Override > Session-Wert > settings-Default
+        _pname = req.ai_provider.value if req.ai_provider else (ki_session.provider or settings.ai_provider)
+        _session_model = ki_session.model if ki_session.model else None
+        _mname = req.ai_model or _session_model or _get_effective_model(_pname, None)
+        provider = _get_provider_by_name(_pname, _mname or None)
 
         # Storyboard laden für vollständigen Szenen-Kontext
         storyboard: StoryboardJson | None = None
@@ -735,12 +736,67 @@ async def _run_chat(video_id: str, job_id: str, req: ChatRequest) -> None:
             ),
         ]))
 
-        full_prompt = f"{system_block}\n\nNutzer: {req.message}"
+        # Bildreferenzen aus der Nutzer-Nachricht extrahieren
+        # Erkennt: "Bild 3 aus Szene 2", "Bild 3 in Szene 2", "Bild 3 Szene 2",
+        #          "Bild 3" (ohne Szenenangabe → alle Szenen durchsuchen)
+        import re as _re
+        referenced_image_paths: list = []
+        image_ref_info: list[str] = []
+        if storyboard:
+            frames_dir = settings.frames_dir / video_id
+            # Szene {N} | scene_{N:03d} parsen
+            def _find_scene(scene_ref: str) -> "Scene | None":
+                try:
+                    n = int(scene_ref)
+                    if 1 <= n <= len(storyboard.scenes):
+                        return storyboard.scenes[n - 1]
+                except ValueError:
+                    pass
+                sid = scene_ref if scene_ref.startswith("scene_") else f"scene_{scene_ref}"
+                return next((s for s in storyboard.scenes if s.scene_id == sid), None)
+
+            # Pattern: "Bild X [aus|in|von] [Szene Y]"
+            for m in _re.finditer(
+                r"[Bb]ild\s+(\d+)(?:\s+(?:aus|in|von|der|im))?(?:\s+[Ss]zene\s+(\d+))?",
+                req.message
+            ):
+                img_num = int(m.group(1))   # 1-basiert
+                scene_num_str = m.group(2)  # None wenn kein Szenen-Bezug
+
+                candidate_scenes = (
+                    [_find_scene(scene_num_str)] if scene_num_str else storyboard.scenes
+                )
+                for scene in candidate_scenes:
+                    if scene is None:
+                        continue
+                    idx = img_num - 1
+                    if 0 <= idx < len(scene.image_group):
+                        filename = scene.image_group[idx]
+                        img_path = frames_dir / filename
+                        if img_path.exists() and img_path not in referenced_image_paths:
+                            referenced_image_paths.append(img_path)
+                            image_ref_info.append(
+                                f"Bild {img_num} aus {scene.scene_id} ({filename})"
+                            )
+                        break  # erstes Match pro Referenz reicht
+
+        image_hint = ""
+        if image_ref_info:
+            image_hint = f"\nReferenzierte Bilder werden visuell mitgeschickt: {', '.join(image_ref_info)}"
+
+        full_prompt = f"{system_block}{image_hint}\n\nNutzer: {req.message}"
 
         await _send(job_id, "progress", "chat", f"KI ({_pname}/{_mname}) denkt...", 40)
+        if image_ref_info:
+            await _send(job_id, "debug", "chat-images", f"Vision: {', '.join(image_ref_info)}")
         await _send(job_id, "debug", "chat-prompt", f"Prompt-Länge: {len(full_prompt)} Zeichen")
 
-        raw_response: str = await loop.run_in_executor(None, provider.complete_text, full_prompt)
+        if referenced_image_paths:
+            raw_response: str = await loop.run_in_executor(
+                None, provider.complete_text_with_images, full_prompt, referenced_image_paths
+            )
+        else:
+            raw_response: str = await loop.run_in_executor(None, provider.complete_text, full_prompt)
 
         await _send(job_id, "progress", "chat", "Antwort verarbeiten...", 85)
 

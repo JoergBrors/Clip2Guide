@@ -64,3 +64,10 @@ class AiProviderBase(ABC):
         Kein Bildinhalt, nur Text. Wird fuer Enrich-Aufgaben verwendet.
         """
         ...
+
+    def complete_text_with_images(self, prompt: str, image_paths: List[Path]) -> str:
+        """
+        Schickt Text + Bilder an das Modell (Vision). Standard-Fallback: complete_text ohne Bilder.
+        Provider, die Vision unterstuetzen, ueberschreiben diese Methode.
+        """
+        return self.complete_text(prompt)

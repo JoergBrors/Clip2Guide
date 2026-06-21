@@ -95,3 +95,22 @@ class AzureCognitiveProvider(AiProviderBase):
             logger.warning("AzureCognitive complete_text Fehler: %s", exc)
             raise
         return response.choices[0].message.content or "{}"
+
+    def complete_text_with_images(self, prompt: str, image_paths: list[Path]) -> str:
+        content: list = []
+        for i, p in enumerate(image_paths, 1):
+            content.append({"type": "text", "text": f"[Bild {i}]"})
+            b64 = self._encode_image(p)
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"}})
+        content.append({"type": "text", "text": prompt})
+        try:
+            response = self._client.chat.completions.create(
+                model=self._deployment,
+                messages=[{"role": "user", "content": content}],
+                response_format={"type": "json_object"},
+                max_completion_tokens=16000,
+            )
+        except Exception as exc:
+            logger.warning("AzureCognitive complete_text_with_images Fehler: %s", exc)
+            raise
+        return response.choices[0].message.content or "{}"

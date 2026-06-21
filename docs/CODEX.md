@@ -4,14 +4,14 @@ Dieses Dokument ist der **vollständige, maschinenlesbare Kontext** für automat
 Code-Änderungen (OpenAI Codex, GitHub Copilot Agent, etc.).
 Es beschreibt Dateistruktur, genaue Signaturen, Konventionen und Muster.
 
-> Stand: 2026-06-06 · Basis-Branch: `main` · zuletzt geändert: 2026-06-06 · Version: 0.3.5
+> Stand: 2026-06-21 · Basis-Branch: `main` · zuletzt geändert: 2026-06-21 · Version: 0.3.6+
 
 ---
 
 ## 1. Stack-Übersicht
 
 | Schicht | Technologie | Version | Einstiegspunkt |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Desktop-Shell | Electron | 35.x | `frontend/electron/main.ts` |
 | Frontend | React 18 + TypeScript + Vite | Node 20 LTS | `frontend/src/App.tsx` |
 | Backend | FastAPI + Python | 3.13 | `backend/app/main.py` |
@@ -21,8 +21,7 @@ Es beschreibt Dateistruktur, genaue Signaturen, Konventionen und Muster.
 ---
 
 ## 2. Vollständige Verzeichnisstruktur
-
-```
+```text
 Clip2Guide/
 ├── frontend/
 │   ├── index.html
@@ -44,7 +43,8 @@ Clip2Guide/
 │       │   ├── FrameCarousel.tsx      # Frame-Vorschau
 │       │   ├── CustomFrameCarousel.tsx
 │       │   ├── FrameEditor.tsx        # Einzelbild-Bearbeitung: Rotation, Zielformat, Blur/Pixelate/Schwaerzen
-│       │   ├── SceneEditor.tsx        # Schritt 4: Storyboard-Editor
+│       │   ├── SceneEditor.tsx        # Schritt 4: Storyboard-Editor (inkl. Chat-Button)
+│       │   ├── ChatFloatPanel.tsx     # Schwebendes KI-Chat-Panel (unabhaengig verschiebbar)
 │       │   ├── ImageStoryboard.tsx    # Storyboard-Vorschau
 │       │   ├── JsonPreview.tsx        # Rohes JSON anzeigen
 │       │   ├── ImageHoverZoom.tsx     # Zoom-Overlay
@@ -71,11 +71,12 @@ Clip2Guide/
 │       │   └── render.py     # POST /api/videos/{id}/render + GET /api/videos/{id}/output/{filename}
 │       ├── services/
 │       │   ├── __init__.py
-│       │   ├── ai_provider_base.py       # ABC: analyze_frames() + complete_text()
-│       │   ├── gemini_provider.py        # GeminiProvider
-│       │   ├── openai_provider.py        # OpenAiProvider
-│       │   ├── azure_openai_provider.py  # AzureOpenAiProvider
-│       │   ├── azure_cognitive_provider.py  # AzureCognitiveProvider
+│       │   ├── ai_provider_base.py       # ABC: analyze_frames() + complete_text() + complete_text_with_images()
+│       │   ├── gemini_provider.py        # GeminiProvider (Vision: Part.from_bytes)
+│       │   ├── openai_provider.py        # OpenAiProvider (Vision: base64 data URL)
+│       │   ├── azure_openai_provider.py  # AzureOpenAiProvider (Vision)
+│       │   ├── azure_cognitive_provider.py  # AzureCognitiveProvider (Vision, max_completion_tokens=16000)
+│       │   ├── session_store.py          # KiSession + SessionStore (In-Memory, thread-sicher)
 │       │   ├── auto_editor_service.py    # AutoEditorService
 │       │   ├── ffmpeg_service.py         # FfmpegService (ffprobe-Metadaten)
 │       │   ├── frame_extractor.py        # FrameExtractor
@@ -113,11 +114,9 @@ Clip2Guide/
 ├── initial.ps1
 └── initial.sh
 ```
-
 ---
 
 ## 3. Backend: Exakte Modell-Definitionen (`backend/app/models.py`)
-
 ```python
 class EditMode(str, Enum):
     AUDIO = "audio"
@@ -237,12 +236,23 @@ class JobStartResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     version: str
-```
 
+class ChatMessage(BaseModel):
+    role: str    # "user" | "assistant"
+    content: str
+
+class ChatRequest(BaseModel):
+    message: str
+    languages: List[str] = Field(default_factory=lambda: ["de"])
+    ai_provider: Optional[AiProvider] = None
+    ai_model: Optional[str] = None
+    address_style: str = Field(default="sie")       # du | sie | neutral
+    writing_style: str = Field(default="sachlich")  # sachlich | leicht_verstaendlich | technisch_detailliert
+    detail_level: str = Field(default="standard")   # kurz | standard | ausfuehrlich
+```
 ---
 
 ## 4. Backend: Settings (`backend/app/config.py`)
-
 ```python
 class Settings(BaseModel):
     # Server
@@ -313,11 +323,9 @@ class Settings(BaseModel):
 
 settings = Settings()   # Singleton-Instanz, überall importierbar
 ```
-
 ---
 
 ## 5. Backend: KI-Provider-Interface (`backend/app/services/ai_provider_base.py`)
-
 ```python
 class AiProviderBase(ABC):
     @abstractmethod
@@ -331,12 +339,19 @@ class AiProviderBase(ABC):
 
     @abstractmethod
     def complete_text(self, prompt: str) -> str: ...
+
+    def complete_text_with_images(self, prompt: str, image_paths: List[Path]) -> str:
+        # Vision-Aufruf: Text + Bilder. Standard-Fallback: complete_text() ohne Bilder.
+        # Alle 4 Provider überschreiben diese Methode mit nativer Vision-Implementierung.
+        return self.complete_text(prompt)
 ```
+`compress_frame_for_ki(path: Path) -> bytes`: Resizes auf max. 768 px, JPEG Qualität 40.
+Wird von `analyze_frames()` und `complete_text_with_images()` genutzt.
 
 **Implementierungen:**
 
 | Klasse | Datei | SDK | Modell-Quelle |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `GeminiProvider` | `gemini_provider.py` | `google-genai` | Dynamisch via `client.models.list()` |
 | `OpenAiProvider` | `openai_provider.py` | `openai` | Feste Liste `OPENAI_VISION_MODELS` |
 | `AzureOpenAiProvider` | `azure_openai_provider.py` | `openai` (AzureOpenAI) | Feste Liste `AZURE_OPENAI_VISION_MODELS` |
@@ -348,12 +363,10 @@ OPENAI_VISION_MODELS = ["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o4-
 AZURE_OPENAI_VISION_MODELS = ["gpt-4.1-mini", "gpt-4.1", "gpt-4o", "gpt-4o-mini"]
 AZURE_COGNITIVE_VISION_MODELS = ["gpt-5-mini", "gpt-4.1-mini", "gpt-4.1", "gpt-4o"]
 ```
-
 ---
 
 ## 6. Backend: Alle HTTP-Endpunkte (exakte Pfade + Methoden)
-
-```
+```text
 GET  /health                                     → HealthResponse
 GET  /api/jobs/{job_id}/events                   → SSE (text/event-stream)
 GET  /api/upload/{upload_id}/events              → SSE (text/event-stream)
@@ -382,6 +395,9 @@ POST /api/videos/{video_id}/rewrite-scene        → JobStartResponse (Backgroun
      Body: RewriteSceneRequest
 POST /api/videos/{video_id}/enrich-scenes        → JobStartResponse (BackgroundTask)
      Body: EnrichRequest
+POST /api/videos/{video_id}/chat                 → JobStartResponse (BackgroundTask)
+     Body: ChatRequest
+     SSE completed.data: {reply: str, updates: [{scene_id, lang, field, value}]}
 POST /api/videos/{video_id}/render               → JobStartResponse (BackgroundTask)
      Body: RenderRequest
 GET  /api/videos/{video_id}/output/{filename}    → FileResponse (MP4)
@@ -394,11 +410,9 @@ POST /api/upload/images                          → ImageSetResponse
 POST /api/images/normalize                       → NormalizeResponse
 POST /api/images/{session_id}/to-frames          → FrameStack
 ```
-
 ---
 
 ## 7. Backend: SSE-Event-Format
-
 ```json
 {
   "type": "progress | completed | error | log | throttled | debug",
@@ -408,7 +422,6 @@ POST /api/images/{session_id}/to-frames          → FrameStack
   "data": null
 }
 ```
-
 **SSE-Bus (job_store.py):**
 ```python
 job_queues: Dict[str, asyncio.Queue] = {}
@@ -416,7 +429,6 @@ async def send_event(job_id: str, event: dict) -> None: ...
 def create_queue(job_id: str) -> asyncio.Queue: ...
 def remove_queue(job_id: str) -> None: ...
 ```
-
 **Keepalive:** `: keepalive\n\n` alle 15 Sekunden
 **Timeout:** 3600 Sekunden → automatisches `error`-Event
 
@@ -425,7 +437,6 @@ def remove_queue(job_id: str) -> None: ...
 ## 8. Backend: Router-interne Patterns
 
 Jeder Router folgt diesem Muster für BackgroundTasks:
-
 ```python
 # 1. Hilfsfunktion
 async def _send(job_id, type_, step, message, percent=0, data=None):
@@ -449,7 +460,6 @@ async def xyz(video_id: str, req: ..., background_tasks: BackgroundTasks = Backg
     background_tasks.add_task(_run_xyz, video_id, job_id, req)
     return JobStartResponse(job_id=job_id, video_id=video_id, message="...")
 ```
-
 ---
 
 ## 9. Backend: Render-Pipeline Details
@@ -467,30 +477,27 @@ _RE_SCENE    = re.compile(r"Szene\s+(\d+)/(\d+)", re.IGNORECASE)
 _RE_ENCODING = re.compile(r"Encoding:\s*Frame\s+(\d+)/(\d+)\s*\((\d+)%\)", re.IGNORECASE)
 _RE_ENCODE_START = re.compile(r"Kodiere Video", re.IGNORECASE)
 ```
-
 ### Szenen-Dauern-Heuristik (vor dem Render)
 ```python
 _TTS_CHARS_PER_SEC = 13.0
 _MIN_SCENE_DURATION = 2.0
 # duration_seconds = max(len(speaker_notes) / 13.0, 2.0)
 ```
-
 ### Qualitäts-Presets (in `create_tutorial.py`)
 | Stufe | CRF | FFmpeg-Preset |
-|---|---|---|
+| --- | --- | --- |
 | `schnell` | 28 | veryfast |
 | `ausgewogen` | 23 | faster |
 | `beste` | 18 | medium |
 
 ### Ausgabe-Layout (1920 × 1080 px)
-```
+```text
 ┌────────────────────────────┬──────────────────────┐
 │   Screenshot / Frame       │  Heading (52 pt)      │
 │   (1320 px breit)          │  Body (36 pt)         │
 │                            │  Hintergrund: #141414 │
 └────────────────────────────┴──────────────────────┘
 ```
-
 ### `RenderService.build_command()` Signatur
 ```python
 def build_command(
@@ -504,11 +511,9 @@ def build_command(
 ) -> Tuple[List[str], Path]:
     # Gibt (cmd, output_dir) zurück
 ```
-
 ---
 
 ## 10. Frontend: TypeScript-Typen (`frontend/src/api/backendClient.ts`)
-
 ```typescript
 interface UploadResponse {
   video_id: string; filename: string; path: string;
@@ -539,13 +544,11 @@ interface JobEvent {
 interface ImageInfo { image_id: string; filename: string; width: number; height: number; }
 interface ImageSetResponse { session_id: string; images: ImageInfo[]; }
 ```
-
 **Basis-URL:** `window.clip2guide?.backendUrl ?? "http://localhost:8787"`
 
 ---
 
 ## 11. Electron: IPC-Kanäle (`frontend/electron/preload.ts` + `main.ts`)
-
 ```typescript
 // window.clip2guide
 backendUrl: "http://localhost:8787"
@@ -571,7 +574,6 @@ clearCache(): Promise<string[]>      // Kanal: "debug:clear-cache" – Electron-
 openLogDir(): Promise<void>          // Kanal: "debug:open-log-dir" – Logs im Finder/Explorer öffnen
 openEnvFile(): Promise<boolean>      // Kanal: "debug:open-env-file" – .env im Texteditor öffnen
 ```
-
 **Pfad-Konstanten in `main.ts`:**
 ```typescript
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
@@ -584,13 +586,12 @@ USER_ENV_FILE: string
 // Dev: Projektroot | Win Prod: %LOCALAPPDATA%\Clip2Guide | Mac/Lin: userData
 USER_LOCAL_DIR: string
 ```
-
 ---
 
 ## 12. Datenpfade pro `video_id`
 
 | Pfad | Inhalt | Erzeugt durch |
-|---|---|---|
+| --- | --- | --- |
 | `workspace/uploads/{uuid}.{ext}` | Original-Upload | `upload.py` |
 | `workspace/cut/{uuid}.mp4` | Auto-Editor-Schnitt | `processing.py` |
 | `workspace/normalized/{uuid}.mp4` | FFmpeg-normalisiert | `processing.py` |
@@ -682,19 +683,38 @@ USER_LOCAL_DIR: string
 - `finishWithCurrentScenes()` nutzt dieselben sortierten Szenengruppen fuer `onDone(selectedFrames, sceneGroups)`, die im Entwurf angezeigt werden. Dadurch ist die sichtbare Struktur vor `Weiter → Storyboard` identisch mit der Struktur, die an `SceneEditor` uebergeben wird.
 - Geaendert wurden `AnalyzeRequest`, `StoryboardDraftHints`, `api.analyzeVideo()`, `SceneEditor` und der Analyse-Prompt-Aufbau in `backend/app/routers/ai.py`; der bestehende Endpunkt `POST /api/videos/{video_id}/analyze` akzeptiert dadurch zusaetzlich `master_prompt`.
 
+### KI-Session (`backend/app/services/session_store.py`)
+
+- `KiSession` wird pro `video_id` in `SessionStore` (In-Memory, thread-sicher mit `threading.Lock`) gehalten.
+- Felder: `video_id`, `created_at`, `master_prompt`, `languages`, `provider`, `model`, `scene_headings: dict[str,str]`, `events: list[SessionEvent]` (max 200), `last_prompt_extra`, `chat_history: list[dict]` (max 100).
+- `add_chat_message(role, content)` hängt `{role, content, ts}` an `chat_history` an.
+- `context_summary()` erzeugt kompakten Kontext-String für KI-Prompts.
+- `to_archive_dict()` / `from_archive_dict()` für ZIP-Serialisierung (schema `"ki_session_v1"`).
+- `SessionStore.restore(session)` lädt eine importierte Session zurück in den Store.
+- `session/ki_session.json` im ZIP wird beim Import über `_restore_ki_session()` in `project_archive_service.py` geladen (nicht als Datei extrahiert).
+
+### Interaktiver KI-Chat (`backend/app/routers/ai.py` — `_run_chat`)
+
+- Endpoint: `POST /api/videos/{video_id}/chat` → `JobStartResponse`
+- Provider-Priorität: `req.ai_provider` > `ki_session.provider` > `settings.ai_provider`
+- Bildreferenz-Parser: Regex `Bild\s+(\d+)(?:…Szene\s+(\d+))?` → Frame-Pfad aus `image_group[N-1]`
+- Mit Bildreferenzen: `provider.complete_text_with_images(prompt, paths)` (Vision)
+- Ohne Bildreferenzen: `provider.complete_text(prompt)` (Text-only)
+- KI antwortet als JSON `{reply, updates: [{scene_id, lang, field, value}]}`
+- Felder werden NUR geändert bei expliziten Aktionswörtern (schreibe / ändere / setze um / …)
+- `ki_session.add_chat_message()` nach jedem Chat-Aufruf (user + assistant)
+
 ### Handbuch-Rendering
 
 - `RenderRequest.output_formats` steuert die Ausgaben: `["video"]`, `["manual"]` oder `["video", "manual"]`. Video bleibt der Default und nutzt weiterhin `create_tutorial.py`.
-- `RenderRequest.handbook_optimize`, `ai_provider` und `ai_model` aktivieren optional eine KI-Segmentierung fuer das DOCX-Handbuch. Die KI darf keine Inhalte umschreiben; sie darf vorhandenen `body` als Bild-Erklaerung und vorhandene `speaker_notes` als Textbausteine nur auf die Bilder derselben Szene verteilen und Uebergaenge minimal glaetten. `ManualRenderService` validiert Szenenanzahl, `scene_id` und `image_group`.
-- `backend/app/services/manual_render_service.py` erzeugt pro Sprache `workspace/output/{video_id}/manual_{lang}.docx` im A5-Querformat mit Calibri 10 pt und 1 cm Raendern. Bilder bleiben eingebettete Bilder, Texte bleiben bearbeitbarer Word-Text. Szenen werden als offizielle Handbuchabschnitte mit Bild-/Texttabellen formatiert; `body` und `speaker_notes` werden pro Szene verlustfrei auf die Bilder verteilt statt als separater Gesamtblock ausgegeben. Jedes Bild einer Szene belegt eine eigene Seite: Die Tabelle hat 2 Zeilen (1 Spalte), oben das Bild (max. 18,4 cm breit, max. 5 cm hoch, Seitenverhaeltnis wird beibehalten), unten der zugehoerige Text. Zwischen Bildern einer Szene wird ein Seitenumbruch eingefuegt.
-- Das Deckblatt ist eine eigenstaendige erste Seite (Seitenumbruch danach): Titel (28 pt), Quellvideo-Dateiname als Untertitel, Metadaten-Tabelle (Sprache, Erstellt am, Anzahl Szenen, Version) und eine Inhaltstabelle mit allen Szenen-Ueberschriften und Bildanzahl je Szene.
-- `ManualRenderService._optimize_for_manual()` versucht bei fehlgeschlagenem `data.get("scenes")`-Zugriff, die Liste aus einem alternativen Top-Level-Key der KI-Antwort zu extrahieren (Fallback fuer Modelle, die die Liste unter einem anderen Schluessel zurueckgeben). Fehlermeldungen enthalten die ersten 300 Zeichen der rohen KI-Antwort zur Diagnose.
-- `AzureCognitiveProvider.complete_text()` sendet jetzt `response_format={"type": "json_object"}` und erlaubt bis zu 8192 Tokens (zuvor 2048 ohne JSON-Modus, was zu Text vor/nach dem JSON fuehrte). Gleiches Token-Limit gilt fuer `OpenAiProvider` und `AzureOpenAiProvider`.
-- Vor dem Einfuegen in Word validiert `ManualRenderService._write_docx()` jedes Frame mit Pillow und schreibt eine DOCX-kompatible JPEG-Arbeitsdatei unter `workspace/tmp/manual-docx-images/{video_id}/{lang}/`. Dadurch funktionieren auch wiederhergestellte oder bearbeitete Frames, deren Dateiendung nicht verlaesslich zum Bildinhalt passt.
-- Bei aktivierter KI-Optimierung wird zusaetzlich `workspace/ai-output/{video_id}/manual_storyboard_{lang}.json` gespeichert. Das originale `storyboard.json` wird fuer Handbuch-only-Rendering nicht ueberschrieben.
+- `RenderRequest.handbook_optimize`, `ai_provider` und `ai_model` aktivieren optional eine KI-Segmentierung fuer das DOCX-Handbuch.
+- `backend/app/services/manual_render_service.py` erzeugt pro Sprache `workspace/output/{video_id}/manual_{lang}.docx` im A5-Querformat mit Calibri 10 pt und 1 cm Raendern. Jedes Bild einer Szene belegt eine eigene Seite (Tabelle: Bild oben, Text unten). Seitenumbruch zwischen Bildern. Deckblatt mit Titel, Quellvideo, Metadaten-Tabelle und Inhaltsverzeichnis.
+- **Szenen-für-Szene-Optimierung** (`_optimize_for_manual`): Erstellt eine `_HandbuchSession` und ruft pro Szene `_build_scene_prompt()` auf. Szene 1 fordert Titel + Segmente an, Szenen 2+ nur Segmente + `session.context_summary()`. Prompt nennt Frame-Namen als nummerierte Liste (`Bild N von M: frame_XXX.jpg`); das `image`-Feld in der KI-Antwort wird per Index korrigiert (nie per String-Vergleich). Retry bei 503/429: bis zu 3 Versuche mit 15/30/45 s Wartezeit.
+- **Prompt-Aufbau** (`_build_scene_prompt`): Übergibt `{scene_id, heading, body, speaker_notes, images}` — kein gesamtes `scene_payload`-JSON. Format-Spec listet exakte Frame-Namen, Beispiel nutzt ersten echten Frame-Namen der Szene.
+- Frames werden vor Einbettung in Word per Pillow als JPEG nach `workspace/tmp/manual-docx-images/{video_id}/{lang}/` validiert.
+- Bei aktivierter KI-Optimierung wird `workspace/ai-output/{video_id}/manual_storyboard_{lang}.json` gespeichert. Das originale `storyboard.json` wird nicht ueberschrieben.
 - `GET /api/videos/{video_id}/manual/{filename}` liefert fertige DOCX-Dateien aus `workspace/output/{video_id}`.
-- `frontend/src/components/RenderPanel.tsx` bietet Ausgabeformat-Auswahl, Handbuch-KI-Optimierung sowie Provider-/Modellauswahl analog zur Storyboard-Analyse.
-- Beim Handbuch-KI-Rendering sendet `_render_manual_worker()` zusaetzlich `debug`-SSE-Events fuer Prompt und KI-Antwort, damit lange `complete_text()`-Aufrufe im Debug-Log sichtbar sind. Render-Exceptions werden mit Fehlerklasse und Sprache geloggt, damit die UI nie einen leeren `Fehler:`-Text anzeigen muss.
+- Beim Handbuch-KI-Rendering sendet `_render_manual_worker()` `debug`-SSE-Events fuer Prompt und KI-Antwort sowie `progress`-Events fuer `manual-status` und `manual-progress`.
 
 ### macOS arm64 Setup-Korrekturen (initial.sh / initial.ps1)
 
@@ -759,7 +779,7 @@ USER_LOCAL_DIR: string
 ## 15. Sicherheitsmodell
 
 | Maßnahme | Details |
-|---|---|
+| --- | --- |
 | Backend-Bindung | Ausschließlich `127.0.0.1:8787` |
 | CORS | `allow_origins=["*"]` — durch Loopback-Bindung abgesichert |
 | API-Keys | Electron setzt `APP_ENV_FILE` → `userData/.env` — nie im Installationsverzeichnis |

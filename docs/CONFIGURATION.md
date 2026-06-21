@@ -5,7 +5,7 @@ Alle Konfigurationsparameter werden über eine **`.env`-Datei** gesteuert.
 ## Speicherort der .env-Datei
 
 | Modus | Pfad |
-|---|---|
+| --- | --- |
 | **Produktion** (gepackte App) | `%APPDATA%\Clip2Guide\.env` (Windows) / `~/Library/Application Support/Clip2Guide/.env` (macOS) |
 | **Entwicklung** | Projekt-Root `E:\Repro\Clip2Guide\.env` |
 
@@ -20,7 +20,7 @@ Vorlage: `localstuff/env.example`
 ## Server
 
 | Variable | Standard | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `APP_HOST` | `127.0.0.1` | Bind-Adresse für den FastAPI-Server |
 | `APP_PORT` | `8787` | Port für den FastAPI-Server |
 
@@ -34,18 +34,17 @@ Vorlage: `localstuff/env.example`
 ### Provider-Auswahl
 
 | Variable | Beispiel | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `AI_PROVIDER` | `gemini` | Kommagetrennte Liste aktiver Provider. Mögliche Werte: `gemini`, `openai`, `azure_openai`, `azure_cognitive`. Der erste Eintrag ist der Vorausgewählte im UI. |
 
 Beispiel mit mehreren Providern:
-```
+```text
 AI_PROVIDER=gemini,azure_openai
 ```
-
 ### Google Gemini
 
 | Variable | Standard | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `GEMINI_API_KEY` | *(leer)* | API-Key aus [Google AI Studio](https://aistudio.google.com/) |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Standard-Modell (wird von der UI überschrieben) |
 
@@ -55,7 +54,7 @@ keine Konfiguration nötig, hängt allein vom API-Key ab.
 ### OpenAI
 
 | Variable | Standard | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `OPENAI_API_KEY` | *(leer)* | API-Key von [platform.openai.com](https://platform.openai.com/) |
 | `OPENAI_MODEL` | `gpt-4.1` | Standard-Modell |
 
@@ -65,7 +64,7 @@ Verfügbare Modelle (fest im Code):
 ### Azure OpenAI
 
 | Variable | Standard | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `AZURE_OPENAI_API_KEY` | *(leer)* | API-Key des Azure OpenAI Service |
 | `AZURE_OPENAI_ENDPOINT` | *(leer)* | Endpunkt-URL, z.B. `https://my-resource.openai.azure.com/` |
 | `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1-mini` | Deployment-Name (= Modell-Name) |
@@ -77,7 +76,7 @@ Verfügbare Modelle (fest im Code):
 ### Azure Cognitive Services
 
 | Variable | Standard | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `AZURE_COGNITIVE_API_KEY` | *(leer)* | API-Key des Azure Cognitive Services |
 | `AZURE_COGNITIVE_ENDPOINT` | *(leer)* | Endpunkt-URL, z.B. `https://my-resource.cognitiveservices.azure.com/` |
 | `AZURE_COGNITIVE_DEPLOYMENT` | `gpt-5-mini` | Deployment-Name |
@@ -94,18 +93,17 @@ Alle Pfade sind relativ zum **Projekt-Root** anzugeben (= `PROJECT_ROOT`-Umgebun
 In gepackten Apps werden sie relativ zu `USER_LOCAL_DIR` aufgelöst.
 
 | Variable | Standard (Windows) | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `FFMPEG_PATH` | `tools/ffmpeg/bin/ffmpeg.exe` | Pfad zur FFmpeg-Binary |
 | `FFPROBE_PATH` | `tools/ffmpeg/bin/ffprobe.exe` | Pfad zur FFprobe-Binary |
 | `AUTO_EDITOR_PATH` | `tools/auto-editor/auto-editor-windows-x86_64.exe` | Pfad zur Auto-Editor-Binary |
 
 > Auf macOS / Linux typischerweise:
-> ```
+> ```text
 > FFMPEG_PATH=tools/ffmpeg/bin/ffmpeg
 > FFPROBE_PATH=tools/ffmpeg/bin/ffprobe
 > AUTO_EDITOR_PATH=tools/auto-editor/auto-editor
 > ```
-
 ---
 
 ## Workspace-Verzeichnisse
@@ -114,7 +112,7 @@ Alle Verzeichnisse werden automatisch angelegt, wenn sie fehlen.
 Im Produktionsbetrieb liegen sie unter `USER_LOCAL_DIR/workspace/` (Windows: `%LOCALAPPDATA%\Clip2Guide\workspace\`).
 
 | Variable | Standard | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `WORKSPACE_ROOT` | `./workspace` | Basis-Verzeichnis für alle Laufzeit-Daten |
 | `UPLOAD_DIR` | `./workspace/uploads` | Originalaufnahmen nach dem Upload |
 | `NORMALIZED_DIR` | `./workspace/normalized` | FFmpeg-normalisierte Videos |
@@ -128,7 +126,7 @@ Im Produktionsbetrieb liegen sie unter `USER_LOCAL_DIR/workspace/` (Windows: `%L
 ## Video- und Frame-Einstellungen
 
 | Variable | Standard | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `OUTPUT_VIDEO_WIDTH` | `1920` | Ausgabebreite (Pixel) |
 | `OUTPUT_VIDEO_HEIGHT` | `1080` | Ausgabehöhe (Pixel) |
 | `FRAME_EXTRACTION_FPS` | `0.333` | Frames/Sekunde bei der Extraktion (0.333 = 1 Frame alle ~3 s) |
@@ -143,7 +141,7 @@ Im Produktionsbetrieb liegen sie unter `USER_LOCAL_DIR/workspace/` (Windows: `%L
 Diese Werte werden als Standard verwendet, wenn die App kein explizites Body-Feld erhält.
 
 | Variable | Standard | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `AUTO_EDITOR_AUDIO_EDIT` | `audio:threshold=0.03` | Audio-Erkennungs-Argument |
 | `AUTO_EDITOR_MOTION_EDIT` | `motion:threshold=0.08` | Bewegungs-Erkennungs-Argument |
 | `AUTO_EDITOR_COMBINED_EDIT` | `(or audio:0.03 motion:0.08)` | Kombinierter Modus |
@@ -154,7 +152,7 @@ Diese Werte werden als Standard verwendet, wenn die App kein explizites Body-Fel
 ## Parallelisierung
 
 | Variable | Standard | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `MAX_PARALLEL_LANGUAGES` | `4` | Maximale Anzahl parallel gerenderter Sprachen |
 | `FFMPEG_THREADS_PER_JOB` | `2` | FFmpeg-Threads pro Normalisierungs-Job |
 
@@ -165,7 +163,7 @@ Diese Werte werden als Standard verwendet, wenn die App kein explizites Body-Fel
 Bei Throttling (HTTP 429 / 503) werden KI-Aufrufe automatisch wiederholt.
 
 | Variable | Standard | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `AI_RETRY_MAX_ATTEMPTS` | `3` | Maximale Wiederholungsversuche (0 = kein Retry) |
 | `AI_RETRY_INITIAL_DELAY` | `10` | Wartezeit in Sekunden vor dem ersten Retry |
 | `AI_RETRY_BACKOFF_FACTOR` | `2.0` | Exponential-Backoff-Multiplikator |
@@ -174,7 +172,6 @@ Bei Throttling (HTTP 429 / 503) werden KI-Aufrufe automatisch wiederholt.
 ---
 
 ## Komplettes Beispiel (`.env`)
-
 ```ini
 # ── Server ──────────────────────────────────────────────────────────
 APP_HOST=127.0.0.1

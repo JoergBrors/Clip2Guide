@@ -23,14 +23,12 @@ electron-builder liest die Version aus `package.json` und verwendet sie für:
 Datei: `.github/workflows/release.yml`
 
 ### Auslöser
-
 ```yaml
 on:
   push:
     tags:
       - 'v*.*.*'
 ```
-
 Der Workflow startet ausschließlich bei einem Git-Tag im Format `v0.1.0`.
 Pushes auf `main` ohne Tag lösen **keinen** Release aus.
 
@@ -51,12 +49,19 @@ Der Workflow besteht aus zwei Phasen: **Build** (Matrix) → **Publish**.
 #### Build-Schritte (alle Plattformen)
 
 1. `actions/checkout@v4`
+
 2. `actions/setup-node@v4` (Node.js 20)
+
 3. **Version synchronisieren**: Tag `v1.2.3` → `npm version 1.2.3 --no-git-tag-version` → `package.json`
+
 4. `npm ci`
+
 5. `npm run build` (Vite + Electron TypeScript)
+
 6. *(macOS only)* Icon erzeugen + Ad-hoc Signierung vor und nach dem Packaging
+
 7. `npx electron-builder --{platform} --{arch} --publish never`
+
 8. `actions/upload-artifact@v4` – Installer-Dateien hochladen (feste Namen, keine Version)
 
 > **Versions-Synchronisation**: `package.json` muss vor einem Release-Tag **nicht** manuell
@@ -64,18 +69,17 @@ Der Workflow besteht aus zwei Phasen: **Build** (Matrix) → **Publish**.
 > `--no-git-tag-version` verhindert einen zweiten Commit/Tag durch npm.
 
 #### Phase 2: Publish
-
 ```yaml
 release:
   needs: build
   runs-on: ubuntu-latest
 ```
-
 Läuft erst, wenn **alle** Build-Jobs erfolgreich waren.
 
 Schritte:
 
 1. Artefakte aller Matrix-Jobs herunterladen
+
 2. `ncipollo/release-action@v1` – GitHub Release mit allen drei Installer-Dateien erstellen
 
 **GitHub Release enthält (feste Dateinamen):**
@@ -91,7 +95,6 @@ Schritte:
 ## Neuen Release erstellen
 
 ### Schritt-für-Schritt
-
 ```powershell
 # 1. Änderungen committen und pushen
 git push origin main
@@ -101,7 +104,6 @@ git push origin main
 git tag v0.4.0
 git push origin v0.4.0
 ```
-
 > `package.json` muss **nicht** vorab manuell angepasst werden.
 > Der CI-Schritt „Sync version from tag to package.json" setzt die Version
 > automatisch auf den Tag-Wert (ohne `v`-Präfix).
@@ -109,15 +111,18 @@ git push origin v0.4.0
 ### Was dann passiert
 
 1. Alle Build-Jobs starten parallel
+
 2. Windows-Build dauert typisch 4–6 Minuten
+
 3. macOS-Build dauert typisch 5–8 Minuten
+
 4. Sobald alle fertig sind, startet `release`
+
 5. GitHub Release wird automatisch angelegt
 
 ---
 
 ## Paketierungs-Konfiguration (electron-builder.yml)
-
 ```yaml
 appId: de.joergbrors.clip2guide
 productName: Clip2Guide
@@ -172,7 +177,6 @@ mac:
   hardenedRuntime: false
   gatekeeperAssess: false
 ```
-
 ### Wichtige Hinweise zur Paketierung
 
 - **Keine Versionsnummer im Dateinamen** – alle drei Installer haben feste Namen.
@@ -197,20 +201,16 @@ mac:
 ## Lokaler Test-Build
 
 ### Windows
-
 ```powershell
 npm run build:dist
 # Ausgabe: dist/release/Clip2Guide-Setup-win-x64.exe
 #          dist/release/Clip2Guide-Portable-win-x64.exe
 ```
-
 ### macOS (arm64 / Apple Silicon)
-
 ```bash
 npm run build:dist
 # Ausgabe: dist/release/Clip2Guide-mac-arm64.pkg
 ```
-
 ---
 
 ## Bekannte Probleme und Lösungen

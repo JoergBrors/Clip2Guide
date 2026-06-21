@@ -3,7 +3,7 @@
 ## Voraussetzungen
 
 | Software | Mindestversion | Hinweis |
-|---|---|---|
+| --- | --- | --- |
 | Python | 3.13 | Wird für das Backend (FastAPI) benötigt |
 | Node.js | 20 LTS | npm ist inbegriffen |
 | npm | 10+ | Kommt mit Node.js 20 |
@@ -18,40 +18,36 @@
 ## Ersteinrichtung (einmalig)
 
 ### Windows
-
 ```powershell
 # PowerShell (als normaler Benutzer, nicht Administrator)
 cd E:\Repro\Clip2Guide
 .\initial.ps1
 ```
-
 Das Skript erledigt:
+
 1. Python-`venv` anlegen in `backend/.venv/`
+
 2. `pip install -r backend/requirements.txt`
+
 3. FFmpeg-Binary nach `tools/ffmpeg/` laden (aus GitHub-Release)
+
 4. Auto-Editor-Binary nach `tools/auto-editor/` laden
 
 ### macOS / Linux
-
 ```bash
 cd ~/Repro/Clip2Guide
 chmod +x initial.sh
 ./initial.sh
 ```
-
 ### .env-Datei anlegen
-
 ```bash
 cp localstuff/env.example .env
 ```
-
 Mindestens diese Werte eintragen (für den KI-Provider, der genutzt werden soll):
-
-```
+```text
 AI_PROVIDER=gemini
 GEMINI_API_KEY=...
 ```
-
 Alle verfügbaren Variablen sind in [CONFIGURATION.md](CONFIGURATION.md) dokumentiert.
 
 ---
@@ -70,11 +66,9 @@ Dies startet parallel:
 - `serve: vite` (Vite Dev-Server auf 127.0.0.1:5173)
 
 Anschließend Electron starten:
-
 ```powershell
 npm run dev:electron
 ```
-
 ### Option B: Manuell (drei separate Terminals)
 
 **Terminal 1 – Backend:**
@@ -83,20 +77,17 @@ cd E:\Repro\Clip2Guide\backend
 ..\.venv\Scripts\Activate.ps1
 uvicorn app.main:app --host 127.0.0.1 --port 8787 --reload
 ```
-
 **Terminal 2 – Vite Dev-Server:**
 ```powershell
 cd E:\Repro\Clip2Guide
 npm run dev:vite
 ```
-
 **Terminal 3 – Electron:**
 ```powershell
 cd E:\Repro\Clip2Guide
 npx tsc -p tsconfig.electron.json   # falls nicht durch VS Code Task aktiv
 npm run dev:electron
 ```
-
 ### Umgebungsvariablen im Dev-Modus
 
 Im Entwicklungsmodus sucht Electron die `.env`-Datei im **Projekt-Root**
@@ -109,7 +100,7 @@ Im Entwicklungsmodus sucht Electron die `.env`-Datei im **Projekt-Root**
 Alle Skripte werden im **Projekt-Root** ausgeführt (nicht im `frontend/` Ordner).
 
 | Skript | Befehl | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `dev:vite` | `vite --config vite.config.ts` | Vite Dev-Server (Hot Reload für React) |
 | `dev:electron` | `electron .` | Startet Electron (erwartet kompiliertes `dist/electron/`) |
 | `build` | `vite build && tsc -p tsconfig.electron.json` | Kompiliert React + TypeScript |
@@ -141,7 +132,7 @@ Das Projekt verwendet **zwei separate** `tsconfig.json`-Dateien.
 ## Python-Abhängigkeiten (backend/requirements.txt)
 
 | Paket | Verwendung |
-|---|---|
+| --- | --- |
 | `fastapi` | HTTP-Framework |
 | `uvicorn[standard]` | ASGI-Server |
 | `pydantic` | Datenvalidierung (Settings, Modelle) |
@@ -209,38 +200,30 @@ Das Projekt verwendet **zwei separate** `tsconfig.json`-Dateien.
 ### Backend-Tests ausführen
 
 Derzeit gibt es keine automatisierten Tests. Manuelle Prüfung per FastAPI-Swagger:
-
-```
+```text
 http://127.0.0.1:8787/docs
 ```
-
 ### Workspace vollständig zurücksetzen
-
 ```powershell
 # Alle generierten Artefakte löschen (nicht die Tools oder venv)
 Remove-Item -Recurse -Force workspace\uploads\*, workspace\normalized\*, `
   workspace\cut\*, workspace\frames\*, workspace\ai-output\*, workspace\output\*
 ```
-
 ---
 
 ## Build und Paketierung
 
 ### Lokaler Test-Build (Windows)
-
 ```powershell
 npm run build:dist
 ```
-
 Erzeugt unter `dist/`:
 - `Clip2Guide Setup {version}.exe` (NSIS-Installer)
 
 ### Lokaler Test-Build (macOS)
-
 ```bash
 npm run build:dist
 ```
-
 Erzeugt unter `dist/`:
 - `Clip2Guide-{version}-arm64.pkg` (PKG-Installer für Apple Silicon)
 

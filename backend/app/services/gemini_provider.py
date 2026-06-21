@@ -98,3 +98,20 @@ class GeminiProvider(AiProviderBase):
             logger.warning("Gemini complete_text Fehler: %s", exc)
             raise
         return response.text.strip()
+
+    def complete_text_with_images(self, prompt: str, image_paths: list[Path]) -> str:
+        parts: list = []
+        for i, p in enumerate(image_paths, 1):
+            parts.append(types.Part.from_text(text=f"[Bild {i}]"))
+            parts.append(types.Part.from_bytes(data=compress_frame_for_ki(p), mime_type="image/jpeg"))
+        parts.append(types.Part.from_text(text=prompt))
+        try:
+            response = self._client.models.generate_content(
+                model=self._model_name,
+                contents=parts,
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
+            )
+        except Exception as exc:
+            logger.warning("Gemini complete_text_with_images Fehler: %s", exc)
+            raise
+        return response.text.strip()

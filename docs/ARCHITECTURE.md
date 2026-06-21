@@ -1,12 +1,13 @@
 # Clip2Guide – Systemarchitektur
 
+> Stand: 2026-06-21 · Version: 0.3.6+
+
 ## Überblick
 
 Clip2Guide ist eine Desktop-Anwendung (Electron), die aus einer Bildschirmaufnahme
-automatisch ein annotiertes Tutorial-Video erzeugt. Die Anwendung besteht aus drei
-Schichten, die ausschließlich lokal auf dem Rechner des Benutzers laufen:
-
-```
+automatisch ein annotiertes Tutorial-Video und ein DOCX-Handbuch erzeugt.
+Die Anwendung besteht aus drei Schichten, die ausschließlich lokal auf dem Rechner laufen:
+```text
 ┌──────────────────────────────────────────────────────────────────┐
 │                        Electron Shell                            │
 │  ┌────────────────────────┐   ┌──────────────────────────────┐  │
@@ -19,7 +20,7 @@ Schichten, die ausschließlich lokal auf dem Rechner des Benutzers laufen:
                │ localhost:8787
 ┌──────────────▼───────────────────────────────────────────────────┐
 │               FastAPI Backend (Python 3.13 / uvicorn)            │
-│  upload │ processing │ frames │ ai │ images │ render │ projects  │
+│  upload │ processing │ frames │ ai (+ chat) │ images │ render    │
 └──────────────────────────────────────────────────────────────────┘
                │ subprocess / sys.executable
 ┌──────────────▼───────────────────────────────────────────────────┐
@@ -32,219 +33,269 @@ Schichten, die ausschließlich lokal auf dem Rechner des Benutzers laufen:
 │  Google Gemini API  │  OpenAI API  │  Azure OpenAI Service       │
 └──────────────────────────────────────────────────────────────────┘
 ```
-
 ---
 
 ## Verzeichnisstruktur
-
-```
+```text
 Clip2Guide/
 ├── frontend/
-│   ├── index.html                    # Vite Entry-Point
-│   ├── electron/                     # Electron-Prozesse (TypeScript)
-│   │   ├── main.ts                   # App-Start, Backend-Spawn, IPC-Handler, Setup-Wizard
-│   │   ├── preload.ts                # contextBridge: window.clip2guide + window.setupAPI
-│   │   └── ipc.ts                    # IPC-Kanal-Typdefinitionen
-│   ├── public/                       # Statische Assets
-│   └── src/                          # React-Anwendung (Renderer-Prozess)
-│       ├── App.tsx                   # Haupt-Workflow, Step-Navigation (5 Schritte)
-│       ├── main.tsx                  # React-Root
+│   ├── index.html
+│   ├── electron/
+│   │   ├── main.ts             # App-Start, Backend-Spawn, IPC-Handler, Setup-Wizard
+│   │   ├── preload.ts          # contextBridge: window.clip2guide + window.setupAPI
+│   │   └── ipc.ts              # IPC-Kanal-Typdefinitionen
+│   ├── public/
+│   └── src/
+│       ├── App.tsx             # Haupt-Workflow, Step-Navigation (5 Schritte)
+│       ├── main.tsx            # React-Root
 │       ├── api/
-│       │   └── backendClient.ts      # Typsichere REST- und SSE-Wrapper
-│       ├── components/               # UI-Komponenten (eine pro Workflow-Schritt)
-│       │   ├── VideoUpload.tsx       # Schritt 1: Datei-Upload (Video oder Bilder)
-│       │   ├── ProcessingWizard.tsx  # Schritt 2: Normalisierung + Auto-Editor
-│       │   ├── ImageAdjust.tsx       # Schritt 2b: Größenanpassung (Bild-Modus)
-│       │   ├── FrameStack.tsx        # Schritt 3: Frame-Extraktion + Auswahl
-│       │   ├── FrameCarousel.tsx     # Frame-Vorschau (Karussell)
-│       │   ├── CustomFrameCarousel.tsx
-│       │   ├── FrameEditor.tsx       # Einzelbild-Bearbeitung: Rotation, Format, Blur/Pixelate/Schwaerzen
-│       │   ├── SceneEditor.tsx       # Schritt 4: Storyboard bearbeiten
-│       │   ├── ImageStoryboard.tsx   # Storyboard-Vorschau
-│       │   ├── JsonPreview.tsx       # Rohes JSON anzeigen
-│       │   ├── ImageHoverZoom.tsx    # Zoom-Overlay
-│       │   ├── RenderPanel.tsx       # Schritt 5: Rendering + Download
-│       │   ├── SetupWizard.tsx       # Erststart-Einrichtung
-│       │   └── DebugPanel.tsx        # Debug & Diagnose (via SettingsPanel → 🔧 Debug)
-│       └── styles/
+│       │   └── backendClient.ts    # Typsichere REST- und SSE-Wrapper
+│       └── components/
+│           ├── VideoUpload.tsx       # Schritt 1: Datei-Upload (Video oder Bilder)
+│           ├── ProcessingWizard.tsx  # Schritt 2: Normalisierung + Auto-Editor
+│           ├── ImageAdjust.tsx       # Schritt 2b: Groessenanpassung (Bild-Modus)
+│           ├── FrameStack.tsx        # Schritt 3: Frame-Extraktion + Auswahl
+│           ├── FrameCarousel.tsx     # Frame-Vorschau (Karussell)
+│           ├── CustomFrameCarousel.tsx
+│           ├── FrameEditor.tsx       # Einzelbild-Bearbeitung: Rotation, Format, Blur/Pixelate
+│           ├── SceneEditor.tsx       # Schritt 4: Storyboard bearbeiten
+│           ├── ChatFloatPanel.tsx    # Schwebendes KI-Chat-Panel (unabhaengig verschiebbar)
+│           ├── ImageStoryboard.tsx   # Storyboard-Vorschau
+│           ├── JsonPreview.tsx       # Rohes JSON anzeigen
+│           ├── ImageHoverZoom.tsx    # Zoom-Overlay
+│           ├── RenderPanel.tsx       # Schritt 5: Rendering + Download
+│           ├── SetupWizard.tsx       # Erststart-Einrichtung
+│           └── DebugPanel.tsx        # Debug & Diagnose
 │
 ├── backend/
-│   ├── requirements.txt              # Python-Abhängigkeiten (ohne feste Versionen)
+│   ├── requirements.txt
 │   └── app/
-│       ├── __init__.py
-│       ├── main.py                   # FastAPI-App, CORS, Router-Einbindung, SSE-Endpunkt
-│       ├── config.py                 # Settings (pydantic BaseModel), .env-Laden
-│       ├── models.py                 # Pydantic-Datenmodelle (Request / Response / Domain)
-│       ├── job_store.py              # asyncio.Queue pro job_id (interner SSE-Bus)
-│       ├── routers/                  # HTTP-Router (je einer pro Fachgebiet)
-│       │   ├── __init__.py
-│       │   ├── upload.py             # POST /api/upload/video
-│       │   ├── processing.py         # POST /api/videos/{id}/normalize + /cut
-│       │   ├── frames.py             # POST /api/videos/{id}/extract-frames
-│       │   ├── ai.py                 # POST /api/videos/{id}/analyze + Storyboard-CRUD
-│       │   ├── images.py             # POST /api/upload/images + Bild-Normalisierung
-│       │   ├── render.py             # POST /api/videos/{id}/render
-│       │   └── projects.py           # Projekt-ZIP Export/Import
-│       ├── services/                 # Fachlogik, ohne HTTP-Wissen
-│       │   ├── __init__.py
-│       │   ├── ai_provider_base.py   # Abstrakte Basisklasse AiProviderBase (ABC)
-│       │   ├── gemini_provider.py    # Implementierung: Google Gemini
-│       │   ├── openai_provider.py    # Implementierung: OpenAI (direkt)
-│       │   ├── azure_openai_provider.py  # Implementierung: Azure OpenAI
-│       │   ├── auto_editor_service.py    # Wrapper für Auto-Editor-Binary
-│       │   ├── ffmpeg_service.py         # ffprobe-Metadaten, Audio-Check
-│       │   ├── frame_extractor.py        # FFmpeg-basierte Frame-Extraktion
-│       │   ├── frame_stack_service.py    # FrameStack laden / speichern (JSON)
-│       │   ├── storyboard_service.py     # Prompt-Bau, JSON-Parsing, Persistenz
-│       │   ├── manual_render_service.py  # DOCX-Handbuch aus Storyboard, optionale KI-Textoptimierung
-│       │   ├── project_archive_service.py # ZIP Export/Import kompletter Projektstaende
-│       │   ├── video_normalizer.py       # FFmpeg H.264/AAC-Normalisierung (async)
-│       │   ├── pause_detector.py         # OpenCV-basierte Pause-Erkennung
-│       │   └── render_service.py         # Subprocess-Befehl für create_tutorial.py
-│       └── scripts/
-│           ├── __init__.py
-│           └── create_tutorial.py    # Standalone-Renderer (MoviePy 2.x + gTTS + PIL)
+│       ├── main.py             # FastAPI-App, CORS, Router-Einbindung, SSE-Endpunkt
+│       ├── config.py           # Settings (pydantic BaseModel), .env-Laden
+│       ├── models.py           # Pydantic-Datenmodelle (Request / Response / Domain)
+│       ├── job_store.py        # asyncio.Queue pro job_id (interner SSE-Bus)
+│       ├── routers/
+│       │   ├── upload.py       # POST /api/upload/video
+│       │   ├── processing.py   # POST /api/videos/{id}/normalize + /cut
+│       │   ├── frames.py       # POST /api/videos/{id}/extract-frames
+│       │   ├── ai.py           # POST /api/videos/{id}/analyze + /rewrite-scene + /enrich + /chat
+│       │   ├── images.py       # POST /api/upload/images + Bild-Normalisierung
+│       │   ├── render.py       # POST /api/videos/{id}/render
+│       │   └── projects.py     # Projekt-ZIP Export/Import
+│       └── services/
+│           ├── ai_provider_base.py       # ABC: analyze_frames() + complete_text() + complete_text_with_images()
+│           ├── gemini_provider.py        # GeminiProvider (Vision: Part.from_bytes)
+│           ├── openai_provider.py        # OpenAiProvider (Vision: base64 data URL)
+│           ├── azure_openai_provider.py  # AzureOpenAiProvider
+│           ├── azure_cognitive_provider.py  # AzureCognitiveProvider
+│           ├── session_store.py          # KI-Session pro video_id (In-Memory, thread-sicher)
+│           ├── auto_editor_service.py
+│           ├── ffmpeg_service.py
+│           ├── frame_extractor.py
+│           ├── frame_stack_service.py
+│           ├── storyboard_service.py
+│           ├── manual_render_service.py  # DOCX-Handbuch + szenenweise KI-Optimierung
+│           ├── project_archive_service.py # ZIP Export/Import inkl. KI-Session
+│           ├── video_normalizer.py
+│           ├── pause_detector.py
+│           └── render_service.py
 │
-├── tools/                            # Binaries (nicht in Git, via initial.ps1 geladen)
-│   ├── ffmpeg/
-│   │   └── bin/
-│   │       ├── ffmpeg.exe
-│   │       └── ffprobe.exe
-│   └── auto-editor/
-│       └── auto-editor-windows-x86_64.exe
+├── tools/
+│   ├── ffmpeg/bin/ffmpeg[.exe]
+│   ├── ffmpeg/bin/ffprobe[.exe]
+│   └── auto-editor/auto-editor-{platform}[.exe]
 │
-├── workspace/                        # Laufzeit-Daten (nicht in Git)
-│   ├── uploads/                      # Originale Upload-Videos
-│   ├── normalized/                   # H.264/AAC-normalisierte Videos
-│   ├── cut/                          # Auto-Editor-Ergebnisse
-│   ├── frames/                       # Extrahierte JPG-Frames (pro video_id/)
-│   ├── ai-output/                    # storyboard.json + frame_stack.json (pro video_id/)
-│   ├── output/                       # Fertige Videos, DOCX-Handbuecher, Projekt-ZIPs (pro video_id/)
-│   ├── tmp/                          # Temporaere Arbeitsdateien, wird beim Backend-Start bereinigt
-│   └── logs/
-│
-├── icon/                             # App-Icons (PNG-Quellen, .icns wird im CI gebaut)
-├── localstuff/
-│   └── env.example                   # Vorlage für .env
-├── .github/
-│   └── workflows/
-│       └── release.yml               # CI/CD: Build + GitHub Release
-├── electron-builder.yml              # Paketierungs-Konfiguration
-├── package.json                      # Node-Abhängigkeiten + npm-Skripte
-├── vite.config.ts                    # Vite (root=frontend, outDir=dist/renderer)
-├── tsconfig.json                     # TypeScript-Basis (Renderer)
-├── tsconfig.electron.json            # TypeScript für Electron Main/Preload
-├── initial.ps1                       # Windows-Setup-Skript (Python-venv, FFmpeg, Auto-Editor)
-└── initial.sh                        # macOS/Linux-Setup-Skript
+└── workspace/
+    ├── uploads/
+    ├── normalized/
+    ├── cut/
+    ├── frames/
+    ├── ai-output/
+    ├── output/
+    └── tmp/
 ```
-
 ---
 
 ## Workflow-Diagramm (Video-Modus)
-
-```
-Benutzer
-  │
-  ▼
+```text
 [1] Upload
-    POST /api/upload/video (multipart)
-    → UUID generieren, Datei in workspace/uploads/ speichern
-    → ffprobe: Metadaten + Audio-Check
-    → SSE-Fortschritt über upload_id
+    POST /api/upload/video → UUID, ffprobe-Metadaten
   │
-  ▼
-[2] Verarbeitung (optional: Auto-Editor-Schnitt)
-    POST /api/videos/{id}/cut
-    → FFmpeg-Audio-Decode-Pruefung; bei Bedarf AAC-kompatible Temp-Eingabe
-    → auto-editor-binary: Stille / Bewegung entfernen
-    → Ausgabe: workspace/cut/{video_id}.mp4
-    POST /api/videos/{id}/normalize
-    → FFmpeg: H.264, 1080p, AAC 44100 Hz, konstante Framerate
-    → Eingabe bevorzugt: cut/ → sonst uploads/
-    → Ausgabe: workspace/normalized/{video_id}.mp4
+[2] Verarbeitung
+    POST /api/videos/{id}/cut    → Auto-Editor-Schnitt
+    POST /api/videos/{id}/normalize → FFmpeg H.264/AAC
   │
-  ▼
 [3] Frame-Extraktion
-    POST /api/videos/{id}/extract-frames
-    → FFmpeg: fps=0.333 (1 Frame ≈ alle 3 s)
-    → Ausgabe: workspace/frames/{video_id}/frame_NNN.jpg
-    → FrameStack-Metadaten in workspace/ai-output/{video_id}/frame_stack.json
+    POST /api/videos/{id}/extract-frames → frame_NNN.jpg
   │
-  ▼
 [3b] Frame-Auswahl im UI
-    Benutzer entwirft Szenen, loescht/verschiebt Szenen, sortiert Bilder per Drag-and-drop
-    → geloeschte Szenen legen Bilder in "Eigene Auswahl"; Bilder koennen daraus neu eingefuegt werden
-    → FrameEditor: Rotation, Ziel-Frame-Format (z.B. 16:3), Crop/Fit/Stretch, Blur/Pixelate/Schwaerzen
-    → selected_frames, scene_groups, scene_descriptions und image_prompts werden an Analyse uebergeben
+    Szenen entwerfen, Frames sortieren, FrameEditor (Rotation, Format, Blur)
   │
-  ▼
 [4] KI-Analyse
     POST /api/videos/{id}/analyze
-    → Frames als base64 + strukturierter Prompt an KI-Provider
-    → KI antwortet mit JSON: scenes, texts (Sprachen), durations
-    → Storyboard validieren + speichern: workspace/ai-output/{video_id}/storyboard.json
+    → Frames komprimiert (max. 768 px, JPEG 40) an KI-Provider
+    → Storyboard mit Texten pro Sprache + KI-Session angelegt
   │
-  ▼
-[4b] Storyboard-Editor (optional)
-    Benutzer bearbeitet Texte, Szenen-Reihenfolge, Dauern
-    PUT /api/videos/{id}/storyboard
+[4b] Storyboard-Editor
+    PUT  /api/videos/{id}/storyboard    (manuelle Bearbeitung)
+    POST /api/videos/{id}/rewrite-scene (Einzel-Szene KI-Rewrite)
+    POST /api/videos/{id}/chat          (interaktiver KI-Assistent)
+      → liest Bildreferenzen aus Nachricht ("Bild 3 aus Szene 2")
+      → schickt Frames per Vision-API mit (complete_text_with_images)
+      → aktualisiert Storyboard-Felder nur bei expliziten Aktionswörtern
   │
-  ▼
 [5] Rendering
     POST /api/videos/{id}/render
-    → output_formats: video, manual oder beide
-    → Video: Szenen-Dauern aus TTS-Textlänge neu berechnen (~13 Zeichen/s)
-    → Video-Subprocess: python -u create_tutorial.py
-       Pro Szene + Sprache:
-         1. speaker_notes → gTTS → temp MP3
-         2. PIL: Screenshot links (1320 px) + Textpanel rechts (600 px) → PNG
-         3. MoviePy: ImageClip + AudioFileClip → Szenen-Clip
-       4. concatenate_videoclips → Gesamtvideo
-       5. FFmpeg-Encoding (H.264, CRF/Preset, 25 fps)
-    → SSE: Fortschritt aus stdout per Regex-Parsing
-    → Video-Ausgabe: workspace/output/{video_id}/tutorial_{lang}.mp4
-    → Handbuch-Ausgabe: workspace/output/{video_id}/manual_{lang}.docx
-       Vor DOCX-Einbettung: Frames per Pillow validieren und als JPEG
-       unter workspace/tmp/manual-docx-images/{video_id}/{lang}/ vorbereiten
+    → output_formats: video | manual | beide
+    → Video: create_tutorial.py als Subprocess (MoviePy + gTTS)
+    → Handbuch: ManualRenderService → DOCX A5-Querformat
+       mit KI-Optimierung: szenenweise complete_text_with_images-Aufrufe,
+       jede Szene erhält Kontext aus bereits verarbeiteten Szenen
 
-[6] Projektstand sichern / wiederherstellen
+[6] Projektstand sichern
     POST /api/videos/{id}/export-project
-    → ZIP mit storyboard.json, frame_stack.json, Frames, Uploads, Outputs und manifest.json
+    → ZIP mit Frames, Storyboard, Outputs und session/ki_session.json
     POST /api/projects/import
-    → Manifest pruefen, Hashes validieren, Zip-Slip verhindern, standardmaessig neue video_id erzeugen
+    → Manifest prüfen, SHA256 validieren, KI-Session in session_store laden
 ```
+---
 
 ## Workflow-Diagramm (Bild-Modus)
-
-Der Bild-Modus ist ein Sonderpfad: Statt eines Videos lädt der Benutzer
-einzelne Screenshots hoch. Ab dem Frame-Stack-Schritt ist der Ablauf identisch
-mit dem Video-Modus.
-
-```
-[1] Upload mehrerer Bilder
-    POST /api/upload/images (multipart, mehrere files)
-    → session_id + ImageInfo-Liste
-
-[2] Größenanpassung
-    POST /api/images/normalize
-    → mode: crop | fit | stretch
-    → Zielgröße: target_width × target_height
-
-[3] Bilder → FrameStack
-    POST /api/images/{session_id}/to-frames
-    → synthetische video_id, frame_stack.json
-
+```text
+[1] Bilder hochladen    POST /api/upload/images
+[2] Normalisieren       POST /api/images/normalize
+[3] → FrameStack        POST /api/images/{session_id}/to-frames
 → ab hier identisch mit Video-Modus Schritt 3b
 ```
+---
+
+## KI-Session (session_store.py)
+
+Pro `video_id` wird eine `KiSession` in einem thread-sicheren In-Memory-Store gehalten.
+```python
+@dataclass
+class KiSession:
+    video_id: str
+    created_at: str
+    master_prompt: str
+    languages: list[str]
+    provider: str           # zuletzt verwendeter Provider
+    model: str              # zuletzt verwendetes Modell
+    scene_headings: dict[str, str]       # scene_id → heading (kompakt)
+    events: list[SessionEvent]           # max. 200 Ereignisse (analyze/rewrite/enrich)
+    last_prompt_extra: str
+    chat_history: list[dict[str, str]]   # max. 100 Nachrichten {role, content, ts}
+```text
+`context_summary()` erzeugt einen kompakten Text (<500 Zeichen/Szene) für KI-Prompts.
+
+**Persistenz:** Die Session wird beim ZIP-Export als `session/ki_session.json` gesichert
+und beim Import über `KiSession.from_archive_dict()` in den Store zurückgeladen.
+
+**Provider-Priorität im Chat:**
+```text
+expliziter Override aus ChatFloatPanel
+  > ki_session.provider / ki_session.model (aus letzter Analyse)
+    > settings.ai_provider / settings.*_model (globaler Fallback)
+```text
+---
+
+## KI-Provider-Abstraktion
+```text
+AiProviderBase (ABC)           ← ai_provider_base.py
+│
+│  analyze_frames(frame_paths, languages, video_id, prompt_extra) → StoryboardJson
+│    Frames als JPEG komprimiert (max. 768 px, Qualität 40) via compress_frame_for_ki()
+│
+│  complete_text(prompt) → str
+│    Text-only, für Rewrite/Enrich/Chat ohne Bildreferenzen
+│
+│  complete_text_with_images(prompt, image_paths) → str
+│    Text + Bilder (Vision), für Chat mit Bildreferenzen und Handbuch-KI
+│    Standard-Fallback: ruft complete_text() auf
+│
+├── GeminiProvider             ← gemini_provider.py
+│     Part.from_bytes (inline JPEG)
+│     Modell-Liste dynamisch via client.models.list()
+│
+├── OpenAiProvider             ← openai_provider.py
+│     base64 data URL (data:image/jpeg;base64,...)
+│     Modelle: gpt-4.1, gpt-4.1-mini, gpt-4o, gpt-4o-mini, o4-mini, o3
+│
+├── AzureOpenAiProvider        ← azure_openai_provider.py
+│     openai SDK mit azure_endpoint + api_version
+│     Modelle: gpt-4.1-mini, gpt-4.1, gpt-4o, gpt-4o-mini
+│
+└── AzureCognitiveProvider     ← azure_cognitive_provider.py
+      cognitiveservices.azure.com-Endpunkt
+      max_completion_tokens=16000 (Reasoning-Modell)
+      Modelle: gpt-5-mini, gpt-4.1-mini, gpt-4.1, gpt-4o
+```text
+---
+
+## Interaktiver KI-Assistent (Chat-Endpoint)
+```text
+POST /api/videos/{video_id}/chat   Body: ChatRequest
+  ↓
+_run_chat() [BackgroundTask]
+  1. KI-Session laden (enthält Provider/Modell aus Analyse)
+  2. Provider bestimmen (Override > Session > Default)
+  3. Storyboard laden (heading/body/speaker_notes aller Szenen als Kontext)
+  4. Bildreferenzen aus req.message extrahieren:
+       Regex: "Bild X [aus|in] [Szene Y]"
+       → frames_dir / video_id / image_group[X-1]
+       → compress_frame_for_ki(path) → bytes
+  5. KI aufrufen:
+       mit Bildreferenzen  → complete_text_with_images(prompt, paths)
+       ohne Bildreferenzen → complete_text(prompt)
+  6. JSON parsen: {reply, updates: [{scene_id, lang, field, value}]}
+     Felder werden NUR geändert bei expliziten Aktionswörtern
+     (schreibe / ändere / setze um / erstelle / formuliere / überarbeite …)
+  7. SSE "completed": {reply, updates}
+  8. Chat-History in KI-Session speichern (max. 100 Einträge)
+```text
+**ChatRequest:**
+```python
+class ChatRequest(BaseModel):
+    message: str
+    languages: list[str]
+    ai_provider: Optional[AiProvider] = None
+    ai_model: Optional[str] = None
+    address_style: str = "sie"        # du | sie | neutral
+    writing_style: str = "sachlich"   # sachlich | leicht_verstaendlich | technisch_detailliert
+    detail_level: str = "standard"    # kurz | standard | ausfuehrlich
+```text
+---
+
+## Handbuch-Rendering (ManualRenderService)
+```text
+POST /api/videos/{id}/render  (output_formats enthält "manual")
+  ↓
+_render_manual_worker()
+  ├── ohne handbook_optimize: _write_docx() direkt
+  └── mit handbook_optimize:
+        _HandbuchSession anlegen (leere completed-Liste)
+        für jede Szene:
+          _build_scene_prompt(scene, options, session, scene_num)
+            Szene 1: fordert Titel + Segmente JSON an
+            Szene N: fordert nur Segmente JSON + session.context_summary()
+          complete_text(prompt)    ← kein Vision-Call, Bilder sind referenziert im Text
+          validieren: Segment-Anzahl == len(image_group)
+          session.completed.append(entry)
+        _write_docx(optimized_storyboard)
+```text
+**DOCX-Format:**
+
+- A5-Querformat, Calibri 10 pt, 1 cm Ränder
+- Deckblatt: Titel (28 pt), Quellvideo, Metadaten-Tabelle, Inhaltsverzeichnis
+- Pro Szene ein Abschnitt; pro Bild eine eigene Seite (Tabelle: Bild oben, Text unten)
+- Frames werden vor Einbettung per Pillow als JPEG nach `workspace/tmp/manual-docx-images/` validiert
 
 ---
 
 ## Datenpfade pro video_id
 
-Alle Artefakte einer Verarbeitungssitzung leben unter derselben UUID:
-
 | Pfad | Inhalt | Erzeugt durch |
-|---|---|---|
+| --- | --- | --- |
 | `workspace/uploads/{uuid}.{ext}` | Original-Upload | upload.py |
 | `workspace/cut/{uuid}.mp4` | Auto-Editor-Schnitt | processing.py |
 | `workspace/normalized/{uuid}.mp4` | FFmpeg-normalisiert | processing.py |
@@ -254,211 +305,106 @@ Alle Artefakte einer Verarbeitungssitzung leben unter derselben UUID:
 | `workspace/ai-output/{uuid}/manual_storyboard_{lang}.json` | Handbuch-optimiertes Storyboard | manual_render_service.py |
 | `workspace/output/{uuid}/tutorial_{lang}.mp4` | Fertiges Tutorial | render.py |
 | `workspace/output/{uuid}/manual_{lang}.docx` | Fertiges DOCX-Handbuch | manual_render_service.py |
-| `workspace/output/{uuid}/project_{uuid}.zip` | Projektarchiv | project_archive_service.py |
-| `workspace/tmp/` | Temporaere Export-, Auto-Editor- und DOCX-Bildarbeitsdateien, Startup-Cleanup | main.py / services |
+| `workspace/output/{uuid}/project_{uuid}.zip` | Projektarchiv (inkl. KI-Session) | project_archive_service.py |
+| `workspace/tmp/` | Temporaere Arbeitsdateien, Startup-Cleanup | main.py / services |
 
 ---
 
 ## Echtzeit-Kommunikation: Server-Sent Events (SSE)
 
-Alle lang laufenden Operationen (Upload, Normalisierung, Schnitt, Frame-Extraktion,
-KI-Analyse, Rendering) werden als **FastAPI BackgroundTask** gestartet.
-Der Fortschritt wird über **Server-Sent Events** übermittelt.
+Alle lang laufenden Operationen laufen als **FastAPI BackgroundTask**.
+Fortschritt kommt über **Server-Sent Events** an den Client.
+```text
+GET /api/jobs/{job_id}/events   → text/event-stream
 
-### Interner Bus: job_store
-
-```python
-# job_store.py
-job_queues: Dict[str, asyncio.Queue] = {}
-
-async def send_event(job_id: str, event: dict) -> None: ...
-def create_queue(job_id: str) -> asyncio.Queue: ...
-def remove_queue(job_id: str) -> None: ...
-```
-
-Jeder Job bekommt eine eigene `asyncio.Queue`. Der SSE-Generator in
-`main.py` (`GET /api/jobs/{job_id}/events`) liest daraus und sendet:
-
-```
-data: {"type":"progress","step":"normalize","message":"Starte FFmpeg...","percent":10}
-
-data: {"type":"log","step":"normalize","message":"frame=  450 fps= 60 ..."}
-
-data: {"type":"completed","step":"normalize","message":"Abgeschlossen.","percent":100,"data":{...}}
-
-data: {"type":"error","step":"...","message":"Fehlermeldung","percent":0}
-```
-
-Keepalive alle 15 Sekunden: `: keepalive\n\n`
-Timeout nach 3600 Sekunden: automatisches `error`-Event.
-
+data: {"type":"progress","step":"analyze","message":"...","percent":42}
+data: {"type":"completed","step":"chat","message":"...","percent":100,"data":{"reply":"...","updates":[...]}}
+data: {"type":"error","step":"...","message":"...","percent":0}
+data: {"type":"debug","step":"chat-images","message":"Vision: Bild 3 aus scene_002 (frame_009.jpg)"}
+```text
 Event-Typen: `progress` | `completed` | `error` | `log` | `throttled` | `debug`
 
----
-
-## KI-Provider-Abstraktion
-
-```
-AiProviderBase (ABC)          ← app/services/ai_provider_base.py
-│   analyze_frames(frame_paths, languages, video_id, prompt_extra) → StoryboardJson
-│   complete_text(prompt) → str   ← Text-only Aufruf, für Enrich-Aufgaben
-│
-├── GeminiProvider            ← gemini_provider.py
-│     google-genai SDK
-│     Bilder als inline_data (JPEG, base64)
-│     Modell-Liste dynamisch via client.models.list()
-│
-├── OpenAiProvider            ← openai_provider.py
-│     openai SDK
-│     Bilder als base64 data URL (data:image/jpeg;base64,...)
-│     Modelle: gpt-4.1, gpt-4.1-mini, gpt-4o, gpt-4o-mini, o4-mini, o3
-│
-├── AzureOpenAiProvider       ← azure_openai_provider.py
-│     openai SDK mit azure_endpoint + api_version
-│     Endpunkt: openai.azure.com (AZURE_OPENAI_ENDPOINT)
-│     Modelle: gpt-4.1-mini, gpt-4.1, gpt-4o, gpt-4o-mini
-│
-└── AzureCognitiveProvider    ← azure_cognitive_provider.py
-      openai SDK mit cognitiveservices.azure.com-Endpunkt
-      Eigene Konfigurationsvariablen: AZURE_COGNITIVE_*
-      Modelle: gpt-5-mini, gpt-4.1-mini, gpt-4.1, gpt-4o
-```
-
-Der aktive Provider wird aus `settings.ai_providers` bestimmt
-(kommagetrennte Liste `AI_PROVIDER` in `.env`).
-Der Benutzer kann Provider und Modell im UI pro Analyse-Lauf wählen.
+Keepalive alle 15 s: `: keepalive`
+Timeout nach 3600 s: automatisches `error`-Event
 
 ---
 
 ## Render-Pipeline (create_tutorial.py)
 
-Das Skript `backend/app/scripts/create_tutorial.py` wird als separater
-Subprocess gestartet (`python -u create_tutorial.py ...`). Es läuft
-**außerhalb des FastAPI-Event-Loops**, schreibt Fortschritt auf `stdout`
-(unbuffered via `-u`), der vom `render`-Router zeilenweise per Regex
-geparst und als SSE-Events an den Client weitergeleitet wird.
+Läuft als separater Subprocess, schreibt Fortschritt auf `stdout` (unbuffered via `-u`).
 
 ### Qualitäts-Presets
 
 | Stufe | CRF | FFmpeg-Preset |
-|---|---|---|
+| --- | --- | --- |
 | `schnell` | 28 | veryfast |
 | `ausgewogen` (default) | 23 | faster |
 | `beste` | 18 | medium |
 
-### Ausgabe-Layout pro Frame (1920 × 1080 px)
-
-```
+### Ausgabe-Layout (1920 × 1080 px)
+```text
 ┌────────────────────────────┬──────────────────────┐
 │                            │  Heading (52 pt)      │
 │   Screenshot / Frame       │  Body (36 pt)         │
 │   (1320 px breit)          │  (600 px breit)       │
 │                            │  Hintergrund: #141414 │
 └────────────────────────────┴──────────────────────┘
-```
-
+```text
 ### TTS-Dauern-Heuristik
 
-Vor dem Render-Start berechnet `render.py` die Szenen-Dauern neu:
 - Geschätzte Sprechgeschwindigkeit: **13 Zeichen/Sekunde**
 - Minimale Szenen-Dauer: **2,0 Sekunden**
-- `duration_seconds = max(len(speaker_notes) / 13, 2.0)`
 
+---
+
+## Pydantic-Datenmodelle (models.py)
+```text
+StoryboardJson
+├── video_id / source_video / cut_video / languages / metadata
+└── scenes: List[Scene]
+    └── Scene
+        ├── scene_id / start_frame / end_frame
+        ├── image_group: List[str]
+        ├── image_prompts: Dict[str, str]
+        ├── texts: Dict[str, TextPanel]
+        │   └── TextPanel: heading / body / speaker_notes
+        ├── slide_panels: Dict[str, List[TextPanel]]
+        ├── render_hints: Dict[str, Any]
+        └── duration_seconds: float
+
+ChatRequest:  message, languages, ai_provider, ai_model, address_style, writing_style, detail_level
+```
 ---
 
 ## Sicherheitsmodell
 
 | Maßnahme | Details |
-|---|---|
+| --- | --- |
 | Backend-Bindung | Ausschließlich `127.0.0.1:8787`, nie öffentlich |
 | CORS | `allow_origins=["*"]` — durch Loopback-Bindung geschützt |
-| API-Key-Speicherort | Electron setzt `APP_ENV_FILE` auf `app.getPath("userData")/.env` — nie im Installationsverzeichnis |
+| API-Key-Speicherort | `app.getPath("userData")/.env` — nie im Installationsverzeichnis |
 | Renderer-Isolation | `nodeIntegration: false`, `contextIsolation: true`, `sandbox: true` |
 | IPC | Alle nativen Aktionen ausschließlich über `contextBridge` (preload.ts) |
-| Dateiformat-Validierung | Upload-Router prüft Suffix gegen Whitelist: `.mp4 .mov .avi .mkv .webm` |
+| Dateiformat-Validierung | Upload: Suffix-Whitelist; ZIP-Import: Manifest + SHA256 + Pfad-Traversal-Schutz |
 
 ---
 
 ## Electron-IPC-Kanäle
 
-Definiert in `preload.ts`, implementiert in `main.ts`:
-
 | Kanal | Richtung | Beschreibung |
-|---|---|---|
+| --- | --- | --- |
 | `open-path` | invoke | Datei/Ordner im System-Explorer öffnen |
 | `open-file-dialog` | invoke | Nativer Öffnen-Dialog |
 | `save-file-dialog` | invoke | Nativer Speichern-Dialog |
 | `get-version` | invoke | App-Version aus `package.json` |
 | `setup:is-complete` | invoke | Prüft ob `.env` im userData existiert |
 | `setup:run-initial` | invoke | Startet `initial.ps1` / `initial.sh` |
-| `setup:log` | on (Renderer-Listener) | Log-Zeilen aus dem Setup-Prozess |
+| `setup:log` | on | Log-Zeilen aus dem Setup-Prozess |
 | `setup:write-env` | invoke | Schreibt Key-Value-Paare in die `.env` |
 | `setup:read-env` | invoke | Liest aktuelle `.env`-Werte |
-| `setup:completed` | send | Signalisiert dem Main-Prozess: Setup fertig |
-| `app:uninstall` | invoke | Deinstallations-Dialog; `deleteUserData: boolean` |
-| `debug:info` | invoke | Systeminfos, Backend-Status, Pfade, venv-Architektur, FFmpeg-Arch, Workspace-Verzeichnisse, Log-Dateien |
-| `debug:clear-cache` | invoke | Electron-Cache + Storage + workspace/tmp leeren |
-| `debug:open-log-dir` | invoke | Log-Verzeichnis in Finder/Explorer öffnen |
+| `setup:completed` | send | Signalisiert: Setup fertig |
+| `app:uninstall` | invoke | Deinstallations-Dialog |
+| `debug:info` | invoke | Systeminfos, Backend-Status, Pfade, venv-Architektur |
+| `debug:clear-cache` | invoke | Electron-Cache + workspace/tmp leeren |
+| `debug:open-log-dir` | invoke | Log-Verzeichnis öffnen |
 | `debug:open-env-file` | invoke | `.env` im Texteditor öffnen |
-
-**contextBridge-Objekte:**
-- `window.clip2guide` – `backendUrl`, `openPath`, `openFileDialog`, `saveFileDialog`, `getVersion`
-- `window.setupAPI` – `isComplete`, `runInitial`, `onLog`, `writeEnv`, `readEnv`, `complete`
-- `window.appAPI` – `uninstall(deleteUserData)`
-- `window.debugAPI` – `getInfo`, `clearCache`, `openLogDir`, `openEnvFile`
-
----
-
-## Pydantic-Datenmodelle (models.py)
-
-```
-StoryboardJson
-├── video_id: str
-├── source_video: str
-├── cut_video: str | None
-├── languages: List[str]
-├── metadata: Dict[str, Any]
-└── scenes: List[Scene]
-    └── Scene
-        ├── scene_id: str              (z.B. "scene_001")
-        ├── start_frame: str           (Dateiname des ersten Frames)
-        ├── end_frame: str | None      (Dateiname des letzten Frames)
-        ├── image_group: List[str]     (alle Frames dieser Szene)
-        ├── image_prompts: Dict[str, str]   (Dateiname → KI-Anweisung pro Bild)
-        ├── texts: Dict[str, TextPanel]     (Sprachcode → Text)
-        │   └── TextPanel
-        │       ├── heading: str
-        │       ├── body: str
-        │       └── speaker_notes: str     (TTS-Vorlese-Text)
-        ├── slide_panels: Dict[str, List[TextPanel]]  (Sprachcode → TextPanel je Bild)
-        ├── render_hints: Dict[str, Any]   (transition, image_durations, text_scroll_speed)
-        └── duration_seconds: float   (≥ 0.5)
-
-FrameStack
-├── video_id: str
-├── total_frames: int
-└── frames: List[FrameInfo]
-    └── FrameInfo
-        ├── filename: str
-        ├── timestamp_seconds: float
-        └── scene_index: int | None
-
-JobEvent
-├── type: "progress" | "completed" | "error" | "log" | "throttled" | "debug"
-├── step: str
-├── message: str
-├── percent: int (0–100)
-└── data: Dict | None
-
-# Request-Modelle
-ProcessingRequest      (video_id, edit_mode, margin, has_audio, audio_threshold, motion_threshold)
-AnalyzeRequest         (video_id, languages, ai_provider, ai_model, master_prompt, selected_frames, scene_groups, scene_descriptions, image_prompts)
-RewriteSceneRequest    (scene_id, image_group, languages, ai_provider, ai_model, current_texts, image_prompts, duration_seconds, storyboard_context, change_summary)
-EnrichRequest          (languages, scene_ids, ai_provider, ai_model)
-RenderRequest          (video_id, languages, output_formats, handbook_optimize, ai_provider, ai_model, fps, quality, tts_slow)
-
-# Response-Modelle
-UploadResponse         (video_id, filename, path, has_audio, metadata)
-JobStartResponse       (job_id, video_id, message)
-HealthResponse         (status, version)
-```
